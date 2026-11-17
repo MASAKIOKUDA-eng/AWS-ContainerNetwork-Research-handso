@@ -1,0 +1,359 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  IPv6 container network lab - VPC layer (deploy twice: Role=consumer and Role=provider).
+  Private-only dual-stack VPC (no IGW / no NAT / no EIGW). AWS services are reached through
+  dual-stack VPC endpoints. Both VPCs use the SAME IPv4 CIDR on purpose (overlap test).
+
+Parameters:
+  Prefix:
+    Type: String
+    Default: v6lab
+    AllowedPattern: "^[a-z0-9-]{3,16}$"
+  Role:
+    Type: String
+    AllowedValues: [consumer, provider]
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: Keep the same value for both VPCs to prove that PrivateLink / VPC Lattice do not care about overlapping IPv4.
+  WorkloadIpMode:
+    Type: String
+    Default: dualstack
+    AllowedValues: [dualstack, ipv6only]
+    Description: >-
+      dualstack = workload subnets have IPv4 + IPv6. ipv6only = workload subnets are IPv6-only
+      (edge subnets for NLB / endpoints always stay dual-stack).
+  EndpointIpAddressType:
+    Type: String
+    Default: dualstack
+    AllowedValues: [dualstack, ipv4]
+    Description: IP address type of the interface endpoints for AWS services. Use ipv4 only as a fallback (then ipv6only workloads cannot reach them).
+  S3GatewayIpAddressType:
+    Type: String
+    Default: dualstack
+    AllowedValues: [dualstack, ipv4]
+    Description: S3 gateway endpoint IP address type (IPv6 for S3 gateway endpoints was added in Nov 2025).
+  FlowLogRetentionDays:
+    Type: Number
+    Default: 7
+    AllowedValues: [1, 3, 5, 7, 14, 30]
+
+Conditions:
+  IsConsumer: !Equals [!Ref Role, consumer]
+  IsIpv6Only: !Equals [!Ref WorkloadIpMode, ipv6only]
+  EndpointsDualstack: !Equals [!Ref EndpointIpAddressType, dualstack]
+
+Resources:
+  # ---------------------------------------------------------------- VPC (IPv4 + Amazon-provided IPv6 /56)
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - { Key: Name, Value: !Sub "${Prefix}-${Role}" }
+        - { Key: Project, Value: !Ref Prefix }
+
+  VpcIpv6Cidr:
+    Type: AWS::EC2::VPCCidrBlock
+    Properties:
+      VpcId: !Ref Vpc
+      AmazonProvidedIpv6CidrBlock: true
+
+  # Subnet plan
+  #   IPv4 : /20 x 4  (edge-a, edge-b, workload-a, workload-b)
+  #   IPv6 : /64 x 4  (same order)
+  # Edge subnets host the NLB and VPC endpoints and are always dual-stack.
+  # Workload subnets host ECS tasks / the load generator and follow WorkloadIpMode.
+  EdgeSubnetA:
+    Type: AWS::EC2::Subnet
+    DependsOn: VpcIpv6Cidr
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 4, 12]]
+      Ipv6CidrBlock: !Select [0, !Cidr [!Select [0, !GetAtt Vpc.Ipv6CidrBlocks], 4, 64]]
+      AssignIpv6AddressOnCreation: true
+      MapPublicIpOnLaunch: false
+      PrivateDnsNameOptionsOnLaunch:
+        HostnameType: resource-name
+        EnableResourceNameDnsAAAARecord: true
+        EnableResourceNameDnsARecord: true
+      Tags:
+        - { Key: Name, Value: !Sub "${Prefix}-${Role}-edge-a" }
+        - { Key: Project, Value: !Ref Prefix }
+
+  EdgeSubnetB:
+    Type: AWS::EC2::Subnet
+    DependsOn: VpcIpv6Cidr
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 4, 12]]
+      Ipv6CidrBlock: !Select [1, !Cidr [!Select [0, !GetAtt Vpc.Ipv6CidrBlocks], 4, 64]]
+      AssignIpv6AddressOnCreation: true
+      MapPublicIpOnLaunch: false
+      PrivateDnsNameOptionsOnLaunch:
+        HostnameType: resource-name
+        EnableResourceNameDnsAAAARecord: true
+        EnableResourceNameDnsARecord: true
+      Tags:
+        - { Key: Name, Value: !Sub "${Prefix}-${Role}-edge-b" }
+        - { Key: Project, Value: !Ref Prefix }
+
+  WorkloadSubnetA:
+    Type: AWS::EC2::Subnet
+    DependsOn: VpcIpv6Cidr
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !If [IsIpv6Only, !Ref "AWS::NoValue", !Select [2, !Cidr [!Ref VpcCidr, 4, 12]]]
+      Ipv6CidrBlock: !Select [2, !Cidr [!Select [0, !GetAtt Vpc.Ipv6CidrBlocks], 4, 64]]
+      Ipv6Native: !If [IsIpv6Only, true, false]
+      AssignIpv6AddressOnCreation: true
+      MapPublicIpOnLaunch: false
+      PrivateDnsNameOptionsOnLaunch:
+        HostnameType: resource-name
+        EnableResourceNameDnsAAAARecord: true
+        EnableResourceNameDnsARecord: !If [IsIpv6Only, false, true]
+      Tags:
+        - { Key: Name, Value: !Sub "${Prefix}-${Role}-workload-a" }
+        - { Key: Project, Value: !Ref Prefix }
+
+  WorkloadSubnetB:
+    Type: AWS::EC2::Subnet
+    DependsOn: VpcIpv6Cidr
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !If [IsIpv6Only, !Ref "AWS::NoValue", !Select [3, !Cidr [!Ref VpcCidr, 4, 12]]]
+      Ipv6CidrBlock: !Select [3, !Cidr [!Select [0, !GetAtt Vpc.Ipv6CidrBlocks], 4, 64]]
+      Ipv6Native: !If [IsIpv6Only, true, false]
+      AssignIpv6AddressOnCreation: true
+      MapPublicIpOnLaunch: false
+      PrivateDnsNameOptionsOnLaunch:
+        HostnameType: resource-name
+        EnableResourceNameDnsAAAARecord: true
+        EnableResourceNameDnsARecord: !If [IsIpv6Only, false, true]
+      Tags:
+        - { Key: Name, Value: !Sub "${Prefix}-${Role}-workload-b" }
+        - { Key: Project, Value: !Ref Prefix }
+
+  # One route table, local routes only (no 0.0.0.0/0, no ::/0).
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - { Key: Name, Value: !Sub "${Prefix}-${Role}-private" }
+        - { Key: Project, Value: !Ref Prefix }
+
+  EdgeSubnetARt:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref EdgeSubnetA, RouteTableId: !Ref PrivateRouteTable }
+  EdgeSubnetBRt:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref EdgeSubnetB, RouteTableId: !Ref PrivateRouteTable }
+  WorkloadSubnetARt:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref WorkloadSubnetA, RouteTableId: !Ref PrivateRouteTable }
+  WorkloadSubnetBRt:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref WorkloadSubnetB, RouteTableId: !Ref PrivateRouteTable }
+
+  # ---------------------------------------------------------------- Endpoint SG (AWS service endpoints)
+  # HTTPS from anywhere inside this VPC (IPv4 and IPv6). No egress.
+  AwsEndpointSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Interface endpoints for AWS services (HTTPS from this VPC only)
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: !Ref VpcCidr, Description: HTTPS from VPC IPv4 }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIpv6: !Select [0, !GetAtt Vpc.Ipv6CidrBlocks], Description: HTTPS from VPC IPv6 }
+      SecurityGroupEgress:
+        - { IpProtocol: "-1", CidrIp: 127.0.0.1/32, Description: No egress }
+      Tags:
+        - { Key: Name, Value: !Sub "${Prefix}-${Role}-aws-endpoints" }
+        - { Key: Project, Value: !Ref Prefix }
+
+  # ---------------------------------------------------------------- VPC endpoints for AWS services
+  # Dual-stack interface endpoints answer AAAA from the VPC resolver, so IPv6-only tasks can use them.
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      IpAddressType: !Ref EndpointIpAddressType
+      DnsOptions: { DnsRecordIpType: !If [EndpointsDualstack, dualstack, ipv4] }
+      SubnetIds: [!Ref EdgeSubnetA, !Ref EdgeSubnetB]
+      SecurityGroupIds: [!Ref AwsEndpointSg]
+  EcrDkrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      IpAddressType: !Ref EndpointIpAddressType
+      DnsOptions: { DnsRecordIpType: !If [EndpointsDualstack, dualstack, ipv4] }
+      SubnetIds: [!Ref EdgeSubnetA, !Ref EdgeSubnetB]
+      SecurityGroupIds: [!Ref AwsEndpointSg]
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      IpAddressType: !Ref EndpointIpAddressType
+      DnsOptions: { DnsRecordIpType: !If [EndpointsDualstack, dualstack, ipv4] }
+      SubnetIds: [!Ref EdgeSubnetA, !Ref EdgeSubnetB]
+      SecurityGroupIds: [!Ref AwsEndpointSg]
+
+  # Consumer only: Session Manager for the load generator EC2 (no SSH, no bastion).
+  SsmEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: IsConsumer
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      IpAddressType: !Ref EndpointIpAddressType
+      DnsOptions: { DnsRecordIpType: !If [EndpointsDualstack, dualstack, ipv4] }
+      SubnetIds: [!Ref EdgeSubnetA, !Ref EdgeSubnetB]
+      SecurityGroupIds: [!Ref AwsEndpointSg]
+  SsmMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: IsConsumer
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssmmessages"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      IpAddressType: !Ref EndpointIpAddressType
+      DnsOptions: { DnsRecordIpType: !If [EndpointsDualstack, dualstack, ipv4] }
+      SubnetIds: [!Ref EdgeSubnetA, !Ref EdgeSubnetB]
+      SecurityGroupIds: [!Ref AwsEndpointSg]
+  Ec2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: IsConsumer
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ec2messages"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      IpAddressType: !Ref EndpointIpAddressType
+      DnsOptions: { DnsRecordIpType: !If [EndpointsDualstack, dualstack, ipv4] }
+      SubnetIds: [!Ref EdgeSubnetA, !Ref EdgeSubnetB]
+      SecurityGroupIds: [!Ref AwsEndpointSg]
+
+  # S3 gateway endpoint (free). The endpoint policy is a data perimeter:
+  # only the buckets this lab needs are reachable through it, read-only.
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      IpAddressType: !Ref S3GatewayIpAddressType
+      RouteTableIds: [!Ref PrivateRouteTable]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EcrImageLayers
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "arn:${AWS::Partition}:s3:::prod-${AWS::Region}-starport-layer-bucket/*"
+          - Sid: AmazonLinux2023Repos
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "arn:${AWS::Partition}:s3:::al2023-repos-${AWS::Region}-*/*"
+          - !If
+            - IsConsumer
+            - Sid: LabDataBucketOnly
+              Effect: Allow
+              Principal: "*"
+              Action: s3:GetObject
+              Resource: !Sub "arn:${AWS::Partition}:s3:::${Prefix}-data-${AWS::AccountId}/*"
+            - !Ref "AWS::NoValue"
+
+  # ---------------------------------------------------------------- VPC Flow Logs
+  # traffic-path / pkt-*addr / flow-direction show which path (and which IP family) a flow used.
+  FlowLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${Prefix}/${Role}/vpc-flow-logs"
+      RetentionInDays: !Ref FlowLogRetentionDays
+
+  FlowLogRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: vpc-flow-logs.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { "aws:SourceAccount": !Ref "AWS::AccountId" }
+      Policies:
+        - PolicyName: write-flow-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams]
+                Resource: !GetAtt FlowLogGroup.Arn
+
+  FlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceId: !Ref Vpc
+      ResourceType: VPC
+      TrafficType: ALL
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Ref FlowLogGroup
+      DeliverLogsPermissionArn: !GetAtt FlowLogRole.Arn
+      MaxAggregationInterval: 60
+      LogFormat: >-
+        ${version} ${interface-id} ${srcaddr} ${dstaddr} ${srcport} ${dstport}
+        ${protocol} ${packets} ${bytes} ${start} ${end} ${action} ${log-status}
+        ${pkt-srcaddr} ${pkt-dstaddr} ${flow-direction} ${traffic-path} ${az-id}
+        ${ecs-service-name} ${ecs-task-id}
+      Tags:
+        - { Key: Project, Value: !Ref Prefix }
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+    Export: { Name: !Sub "${Prefix}-${Role}-VpcId" }
+  VpcIpv6Cidr:
+    Value: !Select [0, !GetAtt Vpc.Ipv6CidrBlocks]
+    Export: { Name: !Sub "${Prefix}-${Role}-VpcIpv6Cidr" }
+  EdgeSubnetA:
+    Value: !Ref EdgeSubnetA
+    Export: { Name: !Sub "${Prefix}-${Role}-EdgeSubnetA" }
+  EdgeSubnetB:
+    Value: !Ref EdgeSubnetB
+    Export: { Name: !Sub "${Prefix}-${Role}-EdgeSubnetB" }
+  WorkloadSubnetA:
+    Value: !Ref WorkloadSubnetA
+    Export: { Name: !Sub "${Prefix}-${Role}-WorkloadSubnetA" }
+  WorkloadSubnetB:
+    Value: !Ref WorkloadSubnetB
+    Export: { Name: !Sub "${Prefix}-${Role}-WorkloadSubnetB" }
+  S3GatewayEndpointId:
+    Value: !Ref S3GatewayEndpoint
+    Export: { Name: !Sub "${Prefix}-${Role}-S3GatewayEndpointId" }
+  WorkloadIpMode:
+    Value: !Ref WorkloadIpMode
+    Export: { Name: !Sub "${Prefix}-${Role}-WorkloadIpMode" }
+  FlowLogGroupName:
+    Value: !Ref FlowLogGroup

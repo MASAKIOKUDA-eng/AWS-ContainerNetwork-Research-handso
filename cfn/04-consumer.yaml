@@ -1,0 +1,314 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  IPv6 container network lab - consumer side.
+  Load generator EC2 (SSM only), PrivateLink interface endpoint (dual-stack),
+  VPC Lattice service network association (with SG), S3 data buckets + S3 interface endpoint.
+
+Parameters:
+  Prefix:
+    Type: String
+    Default: v6lab
+    AllowedPattern: "^[a-z0-9-]{3,16}$"
+  LoadgenInstanceType:
+    Type: String
+    Default: c7i.xlarge
+    Description: Nitro instance type (required for IPv6-only subnets).
+  LoadgenAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Resources:
+  # ---------------------------------------------------------------- Security groups (consumer VPC)
+  # TrustedClientSg  : the load generator normally uses this one.
+  # UntrustedClientSg: swap it onto the load generator for the "denied" security tests (X-1).
+  # Both may reach the AWS service endpoints (443) so Session Manager keeps working.
+  TrustedClientSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Load generator - trusted client
+      VpcId: !ImportValue { "Fn::Sub": "${Prefix}-consumer-VpcId" }
+      SecurityGroupEgress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: HTTP (no internet route) }
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIpv6: "::/0", Description: HTTP (no internet route) }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS (no internet route) }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIpv6: "::/0", Description: HTTPS (no internet route) }
+      Tags:
+        - { Key: Name, Value: !Sub "${Prefix}-consumer-trusted" }
+        - { Key: Project, Value: !Ref Prefix }
+
+  UntrustedClientSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Load generator - untrusted client (security tests)
+      VpcId: !ImportValue { "Fn::Sub": "${Prefix}-consumer-VpcId" }
+      SecurityGroupEgress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: HTTP (no internet route) }
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIpv6: "::/0", Description: HTTP (no internet route) }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS (no internet route) }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIpv6: "::/0", Description: HTTPS (no internet route) }
+      Tags:
+        - { Key: Name, Value: !Sub "${Prefix}-consumer-untrusted" }
+        - { Key: Project, Value: !Ref Prefix }
+
+  PrivateLinkEndpointSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PrivateLink interface endpoint - trusted clients only
+      VpcId: !ImportValue { "Fn::Sub": "${Prefix}-consumer-VpcId" }
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, SourceSecurityGroupId: !Ref TrustedClientSg, Description: HTTP from trusted clients }
+      SecurityGroupEgress:
+        - { IpProtocol: "-1", CidrIp: 127.0.0.1/32, Description: No egress }
+      Tags:
+        - { Key: Name, Value: !Sub "${Prefix}-consumer-pl-endpoint" }
+        - { Key: Project, Value: !Ref Prefix }
+
+  LatticeAssociationSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: VPC Lattice service network association - trusted clients only
+      VpcId: !ImportValue { "Fn::Sub": "${Prefix}-consumer-VpcId" }
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, SourceSecurityGroupId: !Ref TrustedClientSg, Description: HTTP from trusted clients }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref TrustedClientSg, Description: HTTPS from trusted clients }
+      SecurityGroupEgress:
+        - { IpProtocol: "-1", CidrIp: 127.0.0.1/32, Description: No egress }
+      Tags:
+        - { Key: Name, Value: !Sub "${Prefix}-consumer-lattice-assoc" }
+        - { Key: Project, Value: !Ref Prefix }
+
+  S3InterfaceEndpointSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: S3 interface endpoint - trusted clients only
+      VpcId: !ImportValue { "Fn::Sub": "${Prefix}-consumer-VpcId" }
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref TrustedClientSg, Description: HTTPS from trusted clients }
+      SecurityGroupEgress:
+        - { IpProtocol: "-1", CidrIp: 127.0.0.1/32, Description: No egress }
+      Tags:
+        - { Key: Name, Value: !Sub "${Prefix}-consumer-s3-endpoint" }
+        - { Key: Project, Value: !Ref Prefix }
+
+  # ---------------------------------------------------------------- Path 1: PrivateLink interface endpoint (dual-stack)
+  # The connection stays "pendingAcceptance" until the provider accepts it (scripts/accept-endpoint.sh).
+  PrivateLinkEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !ImportValue { "Fn::Sub": "${Prefix}-consumer-VpcId" }
+      ServiceName: !ImportValue { "Fn::Sub": "${Prefix}-EndpointServiceName" }
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: false
+      IpAddressType: dualstack
+      DnsOptions: { DnsRecordIpType: dualstack }
+      SubnetIds:
+        - !ImportValue { "Fn::Sub": "${Prefix}-consumer-EdgeSubnetA" }
+        - !ImportValue { "Fn::Sub": "${Prefix}-consumer-EdgeSubnetB" }
+      SecurityGroupIds: [!Ref PrivateLinkEndpointSg]
+
+  # ---------------------------------------------------------------- Path 2: VPC Lattice service network association
+  LatticeAssociation:
+    Type: AWS::VpcLattice::ServiceNetworkVpcAssociation
+    Properties:
+      ServiceNetworkIdentifier: !ImportValue { "Fn::Sub": "${Prefix}-ServiceNetworkId" }
+      VpcIdentifier: !ImportValue { "Fn::Sub": "${Prefix}-consumer-VpcId" }
+      SecurityGroupIds: [!Ref LatticeAssociationSg]
+      Tags:
+        - { Key: Project, Value: !Ref Prefix }
+
+  # ---------------------------------------------------------------- Path 3: VPC endpoints for AWS services (S3)
+  # DataBucket   : readable ONLY through this VPC's S3 endpoints (bucket policy = resource perimeter).
+  # OutsideBucket: same bucket policy, but NOT listed in the endpoint policies (network perimeter test).
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Prefix}-data-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      Tags:
+        - { Key: Project, Value: !Ref Prefix }
+
+  OutsideBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Prefix}-outside-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      Tags:
+        - { Key: Project, Value: !Ref Prefix }
+
+  S3InterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !ImportValue { "Fn::Sub": "${Prefix}-consumer-VpcId" }
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: false   # keep the gateway endpoint as the default S3 path; use the vpce-specific name for this one
+      IpAddressType: dualstack
+      DnsOptions: { DnsRecordIpType: dualstack }
+      SubnetIds:
+        - !ImportValue { "Fn::Sub": "${Prefix}-consumer-EdgeSubnetA" }
+        - !ImportValue { "Fn::Sub": "${Prefix}-consumer-EdgeSubnetB" }
+      SecurityGroupIds: [!Ref S3InterfaceEndpointSg]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: LabDataBucketOnly
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${DataBucket.Arn}/*"
+
+  # Anonymous GET is allowed only when the request arrives through one of the two endpoints.
+  # S3 does not treat a policy restricted by aws:SourceVpce as public, so Block Public Access stays on.
+  # Writes from outside (CloudShell, IAM principal) still work for uploading the test objects.
+  DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ReadOnlyThroughConsumerEndpoints
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${DataBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                "aws:SourceVpce":
+                  - !ImportValue { "Fn::Sub": "${Prefix}-consumer-S3GatewayEndpointId" }
+                  - !Ref S3InterfaceEndpoint
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: [!GetAtt DataBucket.Arn, !Sub "${DataBucket.Arn}/*"]
+            Condition:
+              Bool: { "aws:SecureTransport": "false" }
+
+  OutsideBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref OutsideBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ReadOnlyThroughConsumerEndpoints
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${OutsideBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                "aws:SourceVpce":
+                  - !ImportValue { "Fn::Sub": "${Prefix}-consumer-S3GatewayEndpointId" }
+                  - !Ref S3InterfaceEndpoint
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: [!GetAtt OutsideBucket.Arn, !Sub "${OutsideBucket.Arn}/*"]
+            Condition:
+              Bool: { "aws:SecureTransport": "false" }
+
+  # ---------------------------------------------------------------- Load generator EC2 (SSM only, no inbound)
+  LoadgenRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      Policies:
+        - PolicyName: loadgen
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource: !ImportValue { "Fn::Sub": "${Prefix}-LoadgenRepoArn" }
+              # Used only by the SigV4 test (X-3) against the Lattice service.
+              - Effect: Allow
+                Action: vpc-lattice-svcs:Invoke
+                Resource: !Sub
+                  - "${SvcArn}/*"
+                  - SvcArn: !ImportValue { "Fn::Sub": "${Prefix}-LatticeServiceArn" }
+
+  LoadgenInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref LoadgenRole]
+
+  Loadgen:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LoadgenAmiId
+      InstanceType: !Ref LoadgenInstanceType
+      IamInstanceProfile: !Ref LoadgenInstanceProfile
+      SubnetId: !ImportValue { "Fn::Sub": "${Prefix}-consumer-WorkloadSubnetA" }
+      SecurityGroupIds: [!Ref TrustedClientSg]
+      MetadataOptions:
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+        HttpEndpoint: enabled
+        HttpProtocolIpv6: enabled
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 30, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true }
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          # Amazon Linux 2023 repositories are reachable through the S3 gateway endpoint.
+          dnf install -y docker jq bind-utils
+          systemctl enable --now docker
+      Tags:
+        - { Key: Name, Value: !Sub "${Prefix}-loadgen" }
+        - { Key: Project, Value: !Ref Prefix }
+
+Outputs:
+  LoadgenInstanceId:
+    Value: !Ref Loadgen
+  TrustedClientSg:
+    Value: !Ref TrustedClientSg
+  UntrustedClientSg:
+    Value: !Ref UntrustedClientSg
+  PrivateLinkEndpointId:
+    Value: !Ref PrivateLinkEndpoint
+  PrivateLinkEndpointDns:
+    Description: Regional DNS name of the interface endpoint (answers A and AAAA)
+    Value: !Select [1, !Split [":", !Select [0, !GetAtt PrivateLinkEndpoint.DnsEntries]]]
+  S3InterfaceEndpointId:
+    Value: !Ref S3InterfaceEndpoint
+  S3InterfaceEndpointDns:
+    Description: "*.vpce-xxx.s3.<region>.vpce.amazonaws.com - replace * with 'bucket'"
+    Value: !Select [1, !Split [":", !Select [0, !GetAtt S3InterfaceEndpoint.DnsEntries]]]
+  DataBucketName:
+    Value: !Ref DataBucket
+  OutsideBucketName:
+    Value: !Ref OutsideBucket
+  LatticeAssociationId:
+    Value: !GetAtt LatticeAssociation.Id

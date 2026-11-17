@@ -1,0 +1,33 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only token: this workflow never writes to the repository or to AWS.
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Pin actions by commit SHA in your fork (Dependabot can keep them updated).
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install linters
+        run: pip install cfn-lint==1.* shellcheck-py checkov
+      - name: cfn-lint
+        run: cfn-lint cfn/*.yaml
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+      - name: python syntax
+        run: python -m py_compile scripts/*.py
+      - name: checkov (CloudFormation + Dockerfiles, report only)
+        run: checkov -d . --framework cloudformation dockerfile --compact --soft-fail

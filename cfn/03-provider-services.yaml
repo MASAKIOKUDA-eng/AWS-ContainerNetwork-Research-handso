@@ -1,0 +1,165 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  IPv6 container network lab - provider services.
+  The same netbench task definition runs as two Fargate services:
+  svc-pl (behind the NLB / PrivateLink) and svc-lattice (VPC Lattice native ECS integration).
+  Also registers the baseline k6 task definition (load generator inside the provider VPC).
+
+Parameters:
+  Prefix:
+    Type: String
+    Default: v6lab
+    AllowedPattern: "^[a-z0-9-]{3,16}$"
+  NetbenchImage:
+    Type: String
+    Description: ECR image pinned by digest, e.g. 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/v6lab/netbench@sha256:...
+    AllowedPattern: "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$"
+  LoadgenImage:
+    Type: String
+    Description: ECR image pinned by digest (loadgen), used by the baseline task.
+    AllowedPattern: "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$"
+  DesiredCount:
+    Type: Number
+    Default: 2
+    MinValue: 0
+    MaxValue: 10
+  TaskCpu:
+    Type: String
+    Default: "512"
+    AllowedValues: ["256", "512", "1024"]
+  TaskMemory:
+    Type: String
+    Default: "1024"
+    AllowedValues: ["512", "1024", "2048"]
+  CpuArchitecture:
+    Type: String
+    Default: X86_64
+    AllowedValues: [X86_64, ARM64]
+    Description: Must match the architecture of the images you built.
+
+Resources:
+  NetbenchTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${Prefix}-netbench"
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      RuntimePlatform: { OperatingSystemFamily: LINUX, CpuArchitecture: !Ref CpuArchitecture }
+      ExecutionRoleArn: !ImportValue { "Fn::Sub": "${Prefix}-TaskExecutionRoleArn" }
+      TaskRoleArn: !ImportValue { "Fn::Sub": "${Prefix}-TaskRoleArn" }
+      Volumes:
+        - Name: web-tmp
+      ContainerDefinitions:
+        - Name: web
+          Image: !Ref NetbenchImage
+          Essential: true
+          ReadonlyRootFilesystem: true
+          # The port name is what VPC Lattice uses to find the container port.
+          PortMappings: [{ Name: http, ContainerPort: 8080, Protocol: tcp, AppProtocol: http }]
+          MountPoints: [{ SourceVolume: web-tmp, ContainerPath: /tmp }]
+          LinuxParameters: { InitProcessEnabled: true, Capabilities: { Drop: [ALL] } }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !ImportValue { "Fn::Sub": "${Prefix}-AppLogGroup" }
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: netbench
+      Tags:
+        - { Key: Project, Value: !Ref Prefix }
+
+  # Path 1: consumer -> interface endpoint -> PrivateLink -> NLB -> task
+  SvcPrivateLink:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: svc-pl
+      Cluster: !ImportValue { "Fn::Sub": "${Prefix}-ClusterName" }
+      TaskDefinition: !Ref NetbenchTaskDef
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      EnableExecuteCommand: false
+      PropagateTags: SERVICE
+      DeploymentConfiguration:
+        DeploymentCircuitBreaker: { Enable: true, Rollback: true }
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !ImportValue { "Fn::Sub": "${Prefix}-provider-WorkloadSubnetA" }
+            - !ImportValue { "Fn::Sub": "${Prefix}-provider-WorkloadSubnetB" }
+          SecurityGroups: [!ImportValue { "Fn::Sub": "${Prefix}-provider-TaskSg" }]
+      LoadBalancers:
+        - ContainerName: web
+          ContainerPort: 8080
+          TargetGroupArn: !ImportValue { "Fn::Sub": "${Prefix}-NlbTgArn" }
+      Tags:
+        - { Key: Project, Value: !Ref Prefix }
+        - { Key: Path, Value: privatelink }
+
+  # Path 2: consumer -> service network association -> VPC Lattice -> task (no load balancer)
+  SvcLattice:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: svc-lattice
+      Cluster: !ImportValue { "Fn::Sub": "${Prefix}-ClusterName" }
+      TaskDefinition: !Ref NetbenchTaskDef
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      EnableExecuteCommand: false
+      PropagateTags: SERVICE
+      DeploymentConfiguration:
+        DeploymentCircuitBreaker: { Enable: true, Rollback: true }
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !ImportValue { "Fn::Sub": "${Prefix}-provider-WorkloadSubnetA" }
+            - !ImportValue { "Fn::Sub": "${Prefix}-provider-WorkloadSubnetB" }
+          SecurityGroups: [!ImportValue { "Fn::Sub": "${Prefix}-provider-TaskSg" }]
+      VpcLatticeConfigurations:
+        - RoleArn: !ImportValue { "Fn::Sub": "${Prefix}-EcsLatticeInfrastructureRoleArn" }
+          TargetGroupArn: !ImportValue { "Fn::Sub": "${Prefix}-LatticeTgArn" }
+          PortName: http
+      Tags:
+        - { Key: Project, Value: !Ref Prefix }
+        - { Key: Path, Value: lattice }
+
+  # Scenario S-0: k6 inside the provider VPC, straight to the NLB (no PrivateLink hop).
+  # Run with scripts/run-baseline.sh (aws ecs run-task + command override).
+  BaselineTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${Prefix}-baseline"
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      Cpu: "1024"
+      Memory: "2048"
+      RuntimePlatform: { OperatingSystemFamily: LINUX, CpuArchitecture: !Ref CpuArchitecture }
+      ExecutionRoleArn: !ImportValue { "Fn::Sub": "${Prefix}-TaskExecutionRoleArn" }
+      TaskRoleArn: !ImportValue { "Fn::Sub": "${Prefix}-TaskRoleArn" }
+      Volumes:
+        - Name: k6-tmp
+      ContainerDefinitions:
+        - Name: k6
+          Image: !Ref LoadgenImage
+          Essential: true
+          ReadonlyRootFilesystem: true
+          MountPoints: [{ SourceVolume: k6-tmp, ContainerPath: /tmp }]
+          LinuxParameters: { InitProcessEnabled: true, Capabilities: { Drop: [ALL] } }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !ImportValue { "Fn::Sub": "${Prefix}-AppLogGroup" }
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: baseline
+      Tags:
+        - { Key: Project, Value: !Ref Prefix }
+
+Outputs:
+  NetbenchTaskDefArn:
+    Value: !Ref NetbenchTaskDef
+  BaselineTaskDefArn:
+    Value: !Ref BaselineTaskDef

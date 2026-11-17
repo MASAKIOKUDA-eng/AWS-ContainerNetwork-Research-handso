@@ -1,0 +1,2 @@
+# AWS-ContainerNetwork-Research-handso
+IPv6通信を前提としたコンテナネットワーク構成の検証ハンズオン

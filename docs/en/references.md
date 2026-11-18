@@ -47,5 +47,8 @@ Check these on the day you run the lab — features and prices change.
 
 ## Tools
 
+- cdkd (CDK Direct): https://github.com/go-to-k/cdkd / https://cdkd.dev
+- AWS CDK: https://docs.aws.amazon.com/cdk/v2/guide/home.html
+
 - k6 options (DNS policy, connection reuse): https://grafana.com/docs/k6/latest/using-k6/k6-options/reference/
 - curl `--aws-sigv4`: https://curl.se/docs/manpage.html#--aws-sigv4

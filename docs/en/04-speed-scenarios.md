@@ -8,7 +8,7 @@
 2. **Connection cost and throughput** — what new connections and large objects cost (S-2, S-4)
 3. **Time to connect** — how long until a new consumer can call the service (S-6)
 
-All commands run on the load generator through the `lg` function (see [03-handson-guide.md](03-handson-guide.md#26-get-into-the-load-generator)) unless marked *CloudShell*.
+All commands run on the load generator through the `lg` function (see [03-handson-guide.md](03-handson-guide.md#25-get-into-the-load-generator)) unless marked *CloudShell*.
 
 ## Metrics recorded by `run-k6.sh`
 
@@ -99,7 +99,7 @@ lg run-k6.sh --label s3-interface --url "https://bucket.${S3IF_DNS#\*.}/$DATA_BU
 ```
 
 - Increase `--vus` (32 → 64 → 128) until MB/s stops growing. Watch the load generator CPU (`top` in another session).
-- With only 2 small Fargate tasks behind ① and ②, the **tasks** may be the limit. Raise `DesiredCount` / `TaskCpu` in stack 03 if needed and write it down.
+- With only 2 small Fargate tasks behind ① and ②, the **tasks** may be the limit. Redeploy with `-c desiredCount=4 -c taskCpu=1024` if needed and write it down.
 - Remember the cost side: interface endpoints and Lattice charge per GB, the S3 gateway endpoint does not (check pricing).
 
 ## S-5 Scale behaviour (optional)

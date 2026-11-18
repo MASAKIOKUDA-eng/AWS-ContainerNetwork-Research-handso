@@ -8,10 +8,11 @@
 |------|-------|
 | Date / time (UTC) | |
 | Region / AZs (load generator, tasks) | |
-| WorkloadIpMode | dualstack / ipv6only |
+| workloadIpMode | dualstack / ipv6only |
 | Load generator instance type | |
 | Task size / count per service | 0.5 vCPU / 1 GiB × 2 |
-| Image digests (netbench / loadgen) | |
+| Image URIs / tags (netbench / loadgen, from cdk-outputs.json) | |
+| cdkd version / deploy and destroy time (deploy-logs/HISTORY.md) | |
 | Runs per data point | |
 
 ## Speed

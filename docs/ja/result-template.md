@@ -8,10 +8,11 @@
 |------|----|
 | 実施日時（UTC） | |
 | リージョン / AZ（負荷生成、タスク） | |
-| WorkloadIpMode | dualstack / ipv6only |
+| workloadIpMode | dualstack / ipv6only |
 | 負荷生成 EC2 のインスタンスタイプ | |
 | タスクサイズ / サービスあたりのタスク数 | 0.5 vCPU / 1 GiB × 2 |
-| イメージのダイジェスト（netbench / loadgen） | |
+| イメージの URI / タグ（netbench / loadgen、cdk-outputs.json） | |
+| cdkd のバージョン / デプロイと削除の所要時間（deploy-logs/HISTORY.md） | |
 | 1 つの値あたりの計測回数 | |
 
 ## スピード

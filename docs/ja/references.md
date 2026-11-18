@@ -47,5 +47,8 @@
 
 ## ツール
 
+- cdkd（CDK Direct）：https://github.com/go-to-k/cdkd / https://cdkd.dev
+- AWS CDK：https://docs.aws.amazon.com/cdk/v2/guide/home.html
+
 - k6 のオプション（DNS のポリシー、接続の再利用）：https://grafana.com/docs/k6/latest/using-k6/k6-options/reference/
 - curl の `--aws-sigv4`：https://curl.se/docs/manpage.html#--aws-sigv4

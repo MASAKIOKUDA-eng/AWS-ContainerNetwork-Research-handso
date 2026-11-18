@@ -1,0 +1,31 @@
+{
+  "name": "aws-containernetwork-research-handso",
+  "version": "1.0.0",
+  "private": true,
+  "description": "IPv6-first container network hands-on: PrivateLink vs VPC endpoints vs VPC Lattice (AWS CDK, deployed with cdkd)",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "synth": "cdkd synth",
+    "diff": "cdkd diff --all",
+    "deploy": "bash scripts/deploy.sh",
+    "deploy:fast": "bash scripts/deploy.sh --no-wait",
+    "destroy": "bash scripts/destroy.sh",
+    "cdk:synth": "cdk synth",
+    "cdk:deploy": "cdk deploy --all --outputs-file cdk-outputs.json"
+  },
+  "devDependencies": {
+    "@cdkd/cli": "^0.355.0",
+    "@types/node": "^22.20.5",
+    "aws-cdk": "^2.1148.1",
+    "aws-cdk-lib": "2.277.0",
+    "constructs": "^10.8.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  }
+}

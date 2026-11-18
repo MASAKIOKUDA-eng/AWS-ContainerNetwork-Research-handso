@@ -51,8 +51,7 @@ lg probe-paths.sh --context untrusted
 
 ```bash
 # CloudShell：自アカウントの署名付きの呼び出しだけを許可
-aws cloudformation deploy --stack-name "$PREFIX-provider-platform" --template-file cfn/02-provider-platform.yaml \
-  --parameter-overrides Prefix="$PREFIX" ProviderWorkloadIpMode=dualstack LatticeAuthMode=iam-required --capabilities CAPABILITY_IAM
+npm run deploy -- -c latticeAuthMode=iam-required
 # 負荷生成 EC2
 lg probe-paths.sh --context iam-required
 ```
@@ -64,7 +63,7 @@ lg probe-paths.sh --context iam-required
 | lattice-https-sigv4（負荷生成 EC2 のロール） | 200 | 200 |
 
 - Lattice のアクセスログを確認：403 は `authDeniedReason`、署名付きは `callerPrincipal`
-- スピードのシナリオの前に `LatticeAuthMode=vpc-only` に戻す（k6 の計測では署名しない）
+- スピードのシナリオの前に `npm run deploy`（既定値は `vpc-only`）で戻す（k6 の計測では署名しない）
 
 ## X-4 提供側からは何が見えるか
 

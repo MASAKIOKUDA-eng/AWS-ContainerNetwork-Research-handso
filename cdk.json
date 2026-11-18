@@ -1,0 +1,26 @@
+{
+  "app": "npx tsx bin/app.ts",
+  "outputsFile": "cdk-outputs.json",
+  "watch": {
+    "include": [
+      "bin/**",
+      "lib/**",
+      "docker/**"
+    ]
+  },
+  "context": {
+    "prefix": "v6lab",
+    "workloadIpMode": "dualstack",
+    "endpointIpAddressType": "dualstack",
+    "s3GatewayIpAddressType": "dualstack",
+    "latticeAuthMode": "vpc-only",
+    "nlbEnforceSgOnPrivateLink": "off",
+    "desiredCount": 2,
+    "taskCpu": "512",
+    "taskMemory": "1024",
+    "cpuArchitecture": "X86_64",
+    "loadgenInstanceType": "c7i.xlarge",
+    "logRetentionDays": 7,
+    "@aws-cdk/core:defaultCrossStackReferences": "strong"
+  }
+}

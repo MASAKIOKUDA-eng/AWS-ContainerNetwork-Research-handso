@@ -22,6 +22,8 @@ A hands-on lab that runs the **same ECS service** behind **AWS PrivateLink** and
 
 Both VPCs use **`10.0.0.0/16`** on purpose, and neither has an internet gateway, NAT or egress-only IGW.
 
+The infrastructure is an **AWS CDK (TypeScript) app deployed with [cdkd](https://github.com/go-to-k/cdkd)** — CDK without CloudFormation stacks, via direct AWS SDK calls. Fast create / destroy cycles fit a lab you build and tear down on the same day. The same app also deploys with the regular AWS CDK CLI (`npm run cdk:deploy`).
+
 ## Documents
 
 | | English | 日本語 |
@@ -41,41 +43,52 @@ Both VPCs use **`10.0.0.0/16`** on purpose, and neither has an internet gateway,
 ```
 .
 ├── README.md / README.ja.md
-├── cfn/
-│   ├── 01-vpc.yaml                  VPC (deploy twice: consumer / provider), dual-stack endpoints, Flow Logs
-│   ├── 02-provider-platform.yaml    ECR, ECS cluster, IAM, NLB + endpoint service, VPC Lattice
-│   ├── 03-provider-services.yaml    task definition, svc-pl, svc-lattice, baseline task
-│   └── 04-consumer.yaml             load generator, PrivateLink endpoint, Lattice association, S3 + endpoints
+├── bin/app.ts                      CDK app: 4 stacks (<prefix>-consumer-vpc / -provider-vpc / -provider / -consumer)
+├── lib/
+│   ├── config.ts                   settings from cdk.json / -c key=value (validated at synth)
+│   ├── vpc-stack.ts                dual-stack private VPC (deployed twice), dual-stack endpoints, Flow Logs
+│   ├── provider-stack.ts           ECS cluster + images, NLB + endpoint service, VPC Lattice, svc-pl / svc-lattice, baseline task
+│   └── consumer-stack.ts           load generator, PrivateLink endpoint, Lattice association, S3 buckets + endpoints
+├── test/stacks.test.ts             security / IPv6 invariants on the synthesized templates (no AWS needed)
+├── cdk.json / package.json         context defaults, npm scripts (deploy / diff / destroy via cdkd)
 ├── docker/
-│   ├── netbench/                    target: nginx (non-root, IPv4+IPv6, /whoami shows what the provider sees)
-│   └── loadgen/                     k6 + curl + dig + scripts
+│   ├── netbench/                   target: nginx (non-root, IPv4+IPv6, /whoami shows what the provider sees)
+│   └── loadgen/                    k6 + curl + dig + scripts
 ├── scripts/
-│   ├── k6-load.js / run-k6.sh       latency / throughput (IPv6 or IPv4, keep-alive or not)
-│   ├── probe-paths.sh               reachability + identity probe for every path and family
-│   ├── run-baseline.sh              S-0 baseline as a Fargate task in the provider VPC
-│   ├── accept-endpoint.sh           provider-side PrivateLink acceptance (+ timing)
-│   ├── measure-provisioning.py      S-6 time to connect a new consumer
-│   ├── swap-client-sg.sh            trusted / untrusted client SG (X-1)
-│   ├── source-ip-report.sh          what the provider saw (Logs Insights)
-│   ├── upload-test-objects.sh       S3 test objects
-│   ├── get-endpoints.sh             values to paste into the load generator
-│   └── summarize.py                 Markdown tables for the slides
-├── docs/en, docs/ja                 scenarios, talk script, runbook (English / Japanese)
-└── results/                         measurement output (not committed)
+│   ├── deploy.sh / destroy.sh      cdkd deploy / destroy with logs in deploy-logs/
+│   ├── k6-load.js / run-k6.sh      latency / throughput (IPv6 or IPv4, keep-alive or not)
+│   ├── probe-paths.sh              reachability + identity probe for every path and family
+│   ├── run-baseline.sh             S-0 baseline as a Fargate task in the provider VPC
+│   ├── accept-endpoint.sh          provider-side PrivateLink acceptance (+ timing)
+│   ├── measure-provisioning.py     S-6 time to connect a new consumer (from cdkd deploy events)
+│   ├── swap-client-sg.sh           trusted / untrusted client SG (X-1)
+│   ├── source-ip-report.sh         what the provider saw (Logs Insights)
+│   ├── upload-test-objects.sh      S3 test objects
+│   ├── get-endpoints.sh            values to paste into the load generator
+│   └── summarize.py                Markdown tables for the slides
+├── docs/en, docs/ja                scenarios, talk script, runbook (English / Japanese)
+├── deploy-logs/                    deploy history (logs are not committed)
+└── results/                        measurement output (not committed)
 ```
 
 ## Quick start
 
 ```bash
-export AWS_REGION=ap-northeast-1 PREFIX=v6lab
-for role in consumer provider; do
-  aws cloudformation deploy --stack-name "$PREFIX-$role-vpc" --template-file cfn/01-vpc.yaml \
-    --parameter-overrides Prefix=$PREFIX Role=$role --capabilities CAPABILITY_IAM
-done
-aws cloudformation deploy --stack-name "$PREFIX-provider-platform" --template-file cfn/02-provider-platform.yaml \
-  --parameter-overrides Prefix=$PREFIX --capabilities CAPABILITY_IAM
-# build & push images, then 03 and 04 — see the hands-on guide
+# CloudShell (Node.js 22.12+, Docker, AWS CLI v2) in a sandbox account
+git clone https://github.com/MASAKIOKUDA-eng/AWS-ContainerNetwork-Research-handso.git
+cd AWS-ContainerNetwork-Research-handso
+npm ci
+npm test                                  # security / IPv6 checks, no AWS calls
+export AWS_REGION=ap-northeast-1
+npx cdkd bootstrap                        # once per account / region (state bucket + asset storage)
+npm run diff                              # what will be created
+npm run deploy                            # builds both images and deploys the 4 stacks; outputs -> cdk-outputs.json
+./scripts/accept-endpoint.sh && ./scripts/upload-test-objects.sh
+# ... measurements: docs/en/03-handson-guide.md ...
+npm run destroy                           # same day
 ```
+
+Settings are CDK context (`cdk.json`, or `-c key=value`): `workloadIpMode=dualstack|ipv6only`, `latticeAuthMode=vpc-only|iam-required`, `endpointIpAddressType`, `s3GatewayIpAddressType`, `desiredCount`, `cpuArchitecture`, … — e.g. `npm run deploy -- -c latticeAuthMode=iam-required`.
 
 Full steps: [docs/en/03-handson-guide.md](docs/en/03-handson-guide.md).
 
@@ -89,9 +102,12 @@ Full steps: [docs/en/03-handson-guide.md](docs/en/03-handson-guide.md).
 - S3: Block Public Access on, reads only via `aws:SourceVpce`, TLS enforced, endpoint policies list only the needed buckets
 - EC2: IMDSv2 required (hop limit 1), SSM only (no SSH, no inbound rules), encrypted EBS
 - Containers: non-root, read-only root FS, all Linux capabilities dropped, no ECS Exec, task role without permissions
-- Images scanned on push (ECR, KMS, immutable tags) and referenced by digest
+- Images are built from `docker/` by cdkd as container assets (content-hash tags) — turn on ECR registry scanning and check findings before measuring; pin base images by digest
+- `npm test` asserts these rules on the synthesized templates (no IGW/NAT/EIP, no `0.0.0.0/0` / `::/0` ingress, acceptance required, IAM auth, Block Public Access, IMDSv2, read-only root FS …), and invalid context values fail the synth
+- `cdk-outputs.json` and deploy logs contain resource IDs and stay local (`.gitignore`); account IDs are masked in the logs
+- cdkd is meant for dev/test, which is what this lab is. For production, deploy the same CDK app with the AWS CDK CLI
 - The SigV4 test reads instance-role credentials from IMDSv2 inside the container and passes them to curl through stdin
-- CI (`.github/workflows/validate.yml`) runs cfn-lint, shellcheck and checkov with a read-only token
+- CI (`.github/workflows/validate.yml`) runs typecheck, the tests, synth (both modes), cfn-lint, shellcheck and checkov with a read-only token and no AWS credentials
 
 Accepted checkov findings (lab scope, short-lived):
 

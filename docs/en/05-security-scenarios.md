@@ -51,8 +51,7 @@ Also check `aws ec2 describe-vpc-endpoint-service-permissions --service-id <id>`
 
 ```bash
 # CloudShell: require signed callers of this account
-aws cloudformation deploy --stack-name "$PREFIX-provider-platform" --template-file cfn/02-provider-platform.yaml \
-  --parameter-overrides Prefix="$PREFIX" ProviderWorkloadIpMode=dualstack LatticeAuthMode=iam-required --capabilities CAPABILITY_IAM
+npm run deploy -- -c latticeAuthMode=iam-required
 # load generator
 lg probe-paths.sh --context iam-required
 ```
@@ -64,7 +63,7 @@ lg probe-paths.sh --context iam-required
 | lattice-https-sigv4 (load generator role) | 200 | 200 |
 
 - Check the Lattice access log: `authDeniedReason` for the 403s, `callerPrincipal` for the signed request.
-- Set `LatticeAuthMode=vpc-only` again before the speed scenarios (signing is not part of the k6 test).
+- Run `npm run deploy` (defaults: `vpc-only`) again before the speed scenarios (signing is not part of the k6 test).
 
 ## X-4 What does the provider see?
 

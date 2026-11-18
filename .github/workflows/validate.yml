@@ -5,29 +5,46 @@ on:
   push:
     branches: [main]
 
-# Read-only token: this workflow never writes to the repository or to AWS.
+# Read-only token: this workflow never writes to the repository or to AWS (synth only, no credentials).
 permissions:
   contents: read
 
 jobs:
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       # Pin actions by commit SHA in your fork (Dependabot can keep them updated).
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install linters
-        run: pip install cfn-lint==1.* shellcheck-py checkov
-      - name: cfn-lint
-        run: cfn-lint cfn/*.yaml
+      - name: Install
+        run: |
+          npm ci --ignore-scripts
+          pip install cfn-lint==1.* shellcheck-py checkov
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Security / IPv6 invariants (vitest + CDK assertions)
+        run: npm test
+      - name: Synth (dual-stack and IPv6-only)
+        env:
+          CDK_DEFAULT_ACCOUNT: "123456789012"
+          CDK_DEFAULT_REGION: ap-northeast-1
+        run: |
+          npx cdk synth --quiet -o cdk.out
+          npx cdk synth --quiet -o cdk.out.v6 -c workloadIpMode=ipv6only -c latticeAuthMode=iam-required
+      - name: cfn-lint (synthesized templates)
+        run: cfn-lint cdk.out/*.template.json cdk.out.v6/*.template.json
       - name: shellcheck
         run: shellcheck scripts/*.sh
       - name: python syntax
         run: python -m py_compile scripts/*.py
-      - name: checkov (CloudFormation + Dockerfiles, report only)
-        run: checkov -d . --framework cloudformation dockerfile --compact --soft-fail
+      - name: checkov (templates + Dockerfiles, report only)
+        run: checkov -d cdk.out --framework cloudformation --compact --soft-fail && checkov -d docker --framework dockerfile --compact --soft-fail

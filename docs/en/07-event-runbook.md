@@ -7,9 +7,9 @@
 | When | What | Done |
 |------|------|------|
 | D-4 (11/17) | Repository ready, templates validated (CI green) | ☐ |
-| D-3 (11/18) | Deploy in a sandbox account (dual-stack mode), smoke test 2.7, security probes X-1 … X-5 | ☐ |
+| D-3 (11/18) | Deploy in a sandbox account (dual-stack mode), smoke test 2.6, security probes X-1 … X-5 | ☐ |
 | D-3 (11/18) | Speed runs S-0 … S-4 (×3), S-6. Copy `results/` to your laptop. **Delete the stacks the same day** | ☐ |
-| D-2 (11/19) | (Optional) IPv6-only mode run of S-1 / S-3, then delete | ☐ |
+| D-2 (11/19) | (Optional) `npm run deploy -- -c workloadIpMode=ipv6only`, S-1 / S-3, then `npm run destroy` | ☐ |
 | D-2 (11/19) | Fill [result-template.md](result-template.md), make charts, replace every `[RESULT]` in the script | ☐ |
 | D-1 (11/20) | Rehearse twice with a timer (target 18–19 min). Prepare the 10-min cut. Export the deck to PDF | ☐ |
 | Day (11/21) | Arrive early, test the projector and the QR code. No live AWS demo — screenshots only | ☐ |
@@ -19,19 +19,18 @@
 
 | Time | Step | Notes |
 |------|------|-------|
-| 0:00 | Deploy 01 ×2, 02 | ~10 min |
-| 0:15 | Build / push images, scan, deploy 03 | ~10 min |
-| 0:30 | Deploy 04, probe before acceptance (X-2), accept, upload objects | |
-| 0:40 | Smoke test 2.7, X-1, X-4 | screenshots of the probe output |
-| 0:55 | X-3 (iam-required) → back to vpc-only | screenshot of the Lattice access log |
+| 0:00 | `npm ci && npm test`, `npx cdkd bootstrap` (first time), `npm run deploy` (builds the images too) | note the duration from `deploy-logs/HISTORY.md` |
+| 0:20 | Check the image scan, probe before acceptance (X-2), accept, upload objects | |
+| 0:40 | Smoke test 2.6, X-1, X-4 | screenshots of the probe output |
+| 0:55 | X-3: `npm run deploy -- -c latticeAuthMode=iam-required` → probe → `npm run deploy` | screenshot of the Lattice access log, deploy times of the update |
 | 1:05 | S-1 ×3 (rotate order), S-2, S-3 | ~60 min |
 | 2:05 | S-4, S-0 baseline, S-6 | |
 | 2:40 | Copy results, `summarize.py`, screenshots of Flow Logs / Logs Insights | |
-| 2:55 | **Clean up** (section 6 of the guide), check tagged resources | |
+| 2:55 | **Clean up**: `npm run destroy` (lists leftovers) | note the destroy time |
 
 ## Screenshots to take (backup for the talk)
 
-- [ ] CloudFormation: the five stacks (`CREATE_COMPLETE`)
+- [ ] `npm run deploy` finished, with the duration from `deploy-logs/HISTORY.md` (cdkd)
 - [ ] VPC console: subnets with IPv6 CIDRs (edge dual-stack / workload)
 - [ ] Endpoint service: `Acceptance required`, supported IP address types IPv4 + IPv6, pending connection
 - [ ] Lattice: service network with the consumer VPC association and the SG

@@ -27,7 +27,7 @@ Architecture and design reasons: [02-architecture.md](02-architecture.md).
 - Same load generator, same k6 script, **same offered load** (constant arrival rate) for every path
 - Default address family for measurements: **IPv6 only** (`--ip onlyIPv6`); IPv4 is measured separately in S-3
 - Repeat each measurement **at least 3 times** (5 for the numbers on slides) and use the median
-- Record date/time, region, AZs of the load generator and of the tasks, instance type and image digests
+- Record date/time, region, AZs of the load generator and of the tasks, instance type, image tags and the cdkd version
 - Run the paths in a **different order** in each repetition (avoid "the first run is always slower" bias)
 
 ## 1. Preparation
@@ -37,19 +37,21 @@ Architecture and design reasons: [02-architecture.md](02-architecture.md).
 | Item | Detail |
 |------|--------|
 | AWS account | **A dedicated sandbox account** |
-| Shell | **AWS CloudShell recommended** (no long-lived access keys on your laptop; bash, AWS CLI v2, jq, Docker and Python 3 are available) |
+| Shell | **AWS CloudShell recommended** (no long-lived access keys on your laptop; bash, AWS CLI v2, jq, Docker, Python 3 and Node.js are available — Node.js must be **22.12+** for cdkd) |
 | Region | e.g. `ap-northeast-1`. Check that VPC Lattice, dual-stack endpoints for ECR / Logs / SSM, and S3 gateway endpoint IPv6 are available there |
-| Permissions | Create IAM roles via CloudFormation. Remove them after the lab |
+| Permissions | Create IAM roles, VPC, ECS, ELB, VPC Lattice, S3, EC2 resources directly (cdkd calls the service APIs, not CloudFormation). Remove them after the lab |
 | Cost | Roughly a few USD per hour while everything runs (interface endpoints × AZs × 2 VPCs, NLB, Fargate, Lattice, EC2). **Delete everything the same day** |
 
-### 1.2 Environment variables
+### 1.2 Get the code
 
 ```bash
 export AWS_REGION=ap-northeast-1
-export PREFIX=v6lab
+export PREFIX=v6lab            # must match the "prefix" context (cdk.json) if you change it
 export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 git clone https://github.com/MASAKIOKUDA-eng/AWS-ContainerNetwork-Research-handso.git
 cd AWS-ContainerNetwork-Research-handso
+npm ci
+npm test        # security / IPv6 invariants on the synthesized templates (no AWS calls)
 ```
 
 > The scripts assume `PREFIX=v6lab`-style names (3–16 lowercase letters, digits, `-`).
@@ -64,113 +66,94 @@ aws budgets create-budget --account-id "$ACCOUNT_ID" \
 
 All resources carry the tag `Project=<prefix>`. Activate it as a cost allocation tag if you want per-lab cost in Cost Explorer.
 
+### 1.4 Turn on image scanning (once per account / region)
+
+cdkd builds the two images and pushes them to its own ECR repository. Scan every push in the registry:
+
+```bash
+aws ecr put-registry-scanning-configuration --scan-type BASIC \
+  --rules '[{"scanFrequency":"SCAN_ON_PUSH","repositoryFilters":[{"filter":"*","filterType":"WILDCARD"}]}]'
+```
+
 ---
 
 ## 2. Build the environment
 
-### 2.1 VPCs (consumer and provider)
+The infrastructure is a CDK app (`bin/app.ts`, `lib/*.ts`) deployed with **cdkd** — no CloudFormation stacks, direct AWS SDK calls.
+The same app deploys with the AWS CDK CLI too (`npm run cdk:deploy`, needs `cdk bootstrap`).
+
+### 2.1 Bootstrap and review
 
 ```bash
-for role in consumer provider; do
-  aws cloudformation deploy --stack-name "$PREFIX-$role-vpc" \
-    --template-file cfn/01-vpc.yaml \
-    --parameter-overrides Prefix="$PREFIX" Role="$role" WorkloadIpMode=dualstack \
-    --capabilities CAPABILITY_IAM
-done
+npx cdkd bootstrap     # once per account / region: cdkd state bucket + asset bucket + container-asset ECR repo
+npm run synth          # templates in cdk.out/ (also useful as design documentation)
+npm run diff           # what will be created
 ```
 
-| Resource | Point |
-|----------|-------|
-| VPC `10.0.0.0/16` **in both** + Amazon-provided IPv6 /56 | Overlapping IPv4 on purpose (X-6) |
-| Edge subnets ×2 (dual-stack) | NLB and VPC endpoints live here |
-| Workload subnets ×2 (`dualstack` or `ipv6only`) | ECS tasks and the load generator |
-| Route table with local routes only | No IGW / NAT / EIGW: nothing can leave except via the paths under test |
-| Dual-stack interface endpoints | ECR API / ECR DKR / Logs (+ SSM ×3 in the consumer) |
-| S3 gateway endpoint (`IpAddressType: dualstack`) | **Endpoint policy**: ECR layer bucket, AL2023 repos, and (consumer) the lab data bucket only |
-| Flow Logs | Custom format with `pkt-srcaddr`, `pkt-dstaddr`, `flow-direction`, `traffic-path` |
+Settings are CDK **context** (defaults in `cdk.json`, override with `-c key=value`). Invalid values stop the synth.
 
-> If the stack fails on `IpAddressType` of the S3 gateway endpoint or an interface endpoint, the region does not support IPv6 for it yet.
-> Re-deploy with `S3GatewayIpAddressType=ipv4` / `EndpointIpAddressType=ipv4` and note it in the results (IPv6-only mode will not work then).
+| Context | Default | Meaning |
+|---------|---------|---------|
+| `prefix` | `v6lab` | stack / resource name prefix |
+| `workloadIpMode` | `dualstack` | `ipv6only` = IPv6-only workload subnets (section 5) |
+| `latticeAuthMode` | `vpc-only` | `iam-required` = only SigV4-signed callers of this account (X-3) |
+| `endpointIpAddressType` / `s3GatewayIpAddressType` | `dualstack` | `ipv4` = fallback for regions without IPv6 support |
+| `nlbEnforceSgOnPrivateLink` | `off` | evaluate the NLB SG for PrivateLink traffic |
+| `desiredCount` / `taskCpu` / `taskMemory` | `2` / `512` / `1024` | size of `svc-pl` and `svc-lattice` |
+| `cpuArchitecture` | `X86_64` | `ARM64` builds arm64 images and uses Graviton Fargate |
+| `loadgenInstanceType` | `c7i.xlarge` | Nitro type (required in IPv6-only subnets) |
 
-### 2.2 Provider platform
+### 2.2 Deploy
 
 ```bash
-aws cloudformation deploy --stack-name "$PREFIX-provider-platform" \
-  --template-file cfn/02-provider-platform.yaml \
-  --parameter-overrides Prefix="$PREFIX" ProviderWorkloadIpMode=dualstack LatticeAuthMode=vpc-only \
-  --capabilities CAPABILITY_IAM
+npm run deploy
 ```
 
-| Resource | Point |
-|----------|-------|
-| Internal NLB `IpAddressType: dualstack` + TCP 80 → TG (ip, 8080) | Target group family = IPv4 in dual-stack mode, IPv6 in IPv6-only mode |
-| VPC endpoint service | `AcceptanceRequired: true`, `SupportedIpAddressTypes: [ipv4, ipv6]`, allowed principal = this account only |
-| Lattice service network (`AWS_IAM`) | Auth policy: **only from the consumer VPC** |
-| Lattice service (`AWS_IAM`) + HTTP 80 / HTTPS 443 listeners | Auth policy switch `LatticeAuthMode`: `vpc-only` or `iam-required` |
-| Lattice target group (IP, HTTP 8080) | ECS registers the tasks (no load balancer) |
-| Lattice access logs → CloudWatch Logs | Auth decisions, caller principal, source VPC, target address |
-| ECR ×2 (immutable tags, scan on push, KMS), ECS cluster (Container Insights enhanced) | |
-| IAM: task execution role, task role **without permissions**, ECS infrastructure role for Lattice | |
+`scripts/deploy.sh` runs `cdkd deploy --all --outputs-file cdk-outputs.json`, writes a log to `deploy-logs/` (account ID masked) and adds a line with the duration to `deploy-logs/HISTORY.md`. The other scripts read their values from `cdk-outputs.json` (kept local, it is in `.gitignore`).
 
-### 2.3 Container images
+The four stacks, in dependency order:
 
-Build in CloudShell (or any place with Docker).
+| Stack | Main resources | Point |
+|-------|----------------|-------|
+| `v6lab-consumer-vpc` / `v6lab-provider-vpc` | VPC `10.0.0.0/16` **in both** + Amazon-provided IPv6 /56 | Overlapping IPv4 on purpose (X-6) |
+| | Edge subnets ×2 (dual-stack) / workload subnets ×2 (`workloadIpMode`) | NLB and endpoints at the edge; tasks and the load generator in the workload tier |
+| | Route table with local routes only | No IGW / NAT / EIGW: nothing can leave except via the paths under test |
+| | Dual-stack interface endpoints ECR API / ECR DKR / Logs (+ SSM ×3 in the consumer) | IPv6-only tasks can still pull images and ship logs |
+| | S3 gateway endpoint (`IpAddressType: dualstack`) | **Endpoint policy**: ECR layer bucket, AL2023 repos, and (consumer) the lab data bucket only |
+| | Flow Logs | Custom format with `pkt-srcaddr`, `pkt-dstaddr`, `flow-direction`, `traffic-path` |
+| `v6lab-provider` | Images `docker/netbench`, `docker/loadgen` (built by cdkd, content-hash tags) | No manual build / push / digest step |
+| | ECS cluster (Container Insights enhanced), task execution role, task role **without permissions** | |
+| | Internal NLB `IpAddressType: dualstack` + TCP 80 → TG (ip, 8080) | TG family = IPv4 in dual-stack mode, IPv6 in IPv6-only mode |
+| | VPC endpoint service | `AcceptanceRequired: true`, `SupportedIpAddressTypes: [ipv4, ipv6]`, allowed principal = this account only |
+| | Lattice service network + service (`AWS_IAM`), HTTP 80 / HTTPS 443, IP target group | Auth policies: **only from the consumer VPC**; service policy switch `latticeAuthMode` |
+| | Lattice access logs → CloudWatch Logs | Auth decisions, caller principal, source VPC, target address |
+| | `svc-pl` (NLB target group) / `svc-lattice` (`VpcLatticeConfigurations`, port name `http`), baseline task definition | Same task definition behind both paths |
+| `v6lab-consumer` | Load generator EC2 (SSM only), trusted / untrusted client SGs | |
+| | PrivateLink interface endpoint (dual-stack) | Stays `pendingAcceptance` until the provider accepts (2.3) |
+| | Lattice service network VPC association (with SG) | |
+| | S3 data / outside buckets, S3 interface endpoint (dual-stack, endpoint policy) | Reads only via `aws:SourceVpce` |
 
-```bash
-out() { aws cloudformation describe-stacks --stack-name "$PREFIX-$1" --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text; }
-REPO_NB=$(out provider-platform NetbenchRepoUri)
-REPO_LG=$(out provider-platform LoadgenRepoUri)
-aws ecr get-login-password | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+> If the deploy fails on `IpAddressType` of the S3 gateway endpoint or an interface endpoint, the region does not support IPv6 for it yet.
+> Re-deploy with `-c s3GatewayIpAddressType=ipv4` / `-c endpointIpAddressType=ipv4` and note it in the results (IPv6-only mode will not work then).
 
-# Pin the base images by digest for the numbers you publish (--build-arg BASE=...@sha256:...)
-docker build --platform linux/amd64 -t "$REPO_NB:v1" docker/netbench
-docker build --platform linux/amd64 -t "$REPO_LG:v1" -f docker/loadgen/Dockerfile .
-docker push "$REPO_NB:v1"
-docker push "$REPO_LG:v1"
-
-NB_DIGEST=$(aws ecr describe-images --repository-name "$PREFIX/netbench" --image-ids imageTag=v1 --query 'imageDetails[0].imageDigest' --output text)
-LG_DIGEST=$(aws ecr describe-images --repository-name "$PREFIX/loadgen"  --image-ids imageTag=v1 --query 'imageDetails[0].imageDigest' --output text)
-export NETBENCH_IMAGE="$REPO_NB@$NB_DIGEST"
-export LOADGEN_IMAGE="$REPO_LG@$LG_DIGEST"
-```
-
-Check the scan results and fix Critical / High findings before you continue.
+Check the image scan results (fix Critical / High findings before you measure) and the services:
 
 ```bash
-for r in netbench loadgen; do
-  aws ecr describe-image-scan-findings --repository-name "$PREFIX/$r" --image-id imageTag=v1 \
+source scripts/lib.sh
+for uri in "$(out provider NetbenchImageUri)" "$(out provider LoadgenImageUri)"; do
+  repo="${uri#*/}"; repo="${repo%%:*}"; tag="${uri##*:}"
+  aws ecr describe-image-scan-findings --repository-name "$repo" --image-id imageTag="$tag" \
     --query 'imageScanFindings.findingSeverityCounts'
 done
-```
-
-### 2.4 Provider services
-
-```bash
-aws cloudformation deploy --stack-name "$PREFIX-provider-services" \
-  --template-file cfn/03-provider-services.yaml \
-  --parameter-overrides Prefix="$PREFIX" NetbenchImage="$NETBENCH_IMAGE" LoadgenImage="$LOADGEN_IMAGE"
-```
-
-- `svc-pl` registers its tasks in the NLB target group (`LoadBalancers`)
-- `svc-lattice` registers its tasks in the Lattice target group (`VpcLatticeConfigurations`, port name `http`)
-
-```bash
 aws ecs describe-services --cluster "$PREFIX" --services svc-pl svc-lattice \
   --query 'services[].{name:serviceName,running:runningCount,desired:desiredCount}' --output table
-aws vpc-lattice list-targets --target-group-identifier "$(out provider-platform LatticeTgArn)" \
+aws vpc-lattice list-targets --target-group-identifier "$(out provider LatticeTgArn)" \
   --query 'items[].{ip:id,port:port,status:status}' --output table
 ```
 
-### 2.5 Consumer side
+### 2.3 Provider approval and test data
 
-```bash
-aws cloudformation deploy --stack-name "$PREFIX-consumer" \
-  --template-file cfn/04-consumer.yaml \
-  --parameter-overrides Prefix="$PREFIX" \
-  --capabilities CAPABILITY_IAM
-```
-
-Then, as the **provider**, approve the PrivateLink connection (security control + S-6 timing), and upload the S3 test objects:
+As the **provider**, approve the PrivateLink connection (security control + S-6 timing), then upload the S3 test objects:
 
 ```bash
 ./scripts/accept-endpoint.sh
@@ -178,16 +161,27 @@ Then, as the **provider**, approve the PrivateLink connection (security control 
 python3 scripts/measure-provisioning.py --prefix "$PREFIX" --csv results/provisioning.csv
 ```
 
-> Before you accept, run the probe in 2.7 once: the PrivateLink path must **not** work (`pendingAcceptance`).
+> Before you accept, run the probe in 2.6 once: the PrivateLink path must **not** work (`pendingAcceptance`).
 > That is security test X-2.
 
-### 2.6 Get into the load generator
+### 2.4 Changing a setting later
 
-In CloudShell, print the values the load generator needs (it cannot call the CloudFormation API — there is no route):
+Redeploy with the new context; cdkd updates only what changed (`npm run diff -- -c ...` shows it first):
+
+```bash
+npm run deploy -- -c latticeAuthMode=iam-required    # X-3
+npm run deploy                                       # back to the cdk.json defaults
+```
+
+> Keep the same `-c` values for every deploy of a scenario. A deploy without them returns to the defaults in `cdk.json`.
+
+### 2.5 Get into the load generator
+
+In CloudShell, print the values the load generator needs (they come from `cdk-outputs.json`, which stays in CloudShell):
 
 ```bash
 ./scripts/get-endpoints.sh
-LOADGEN_ID=$(out consumer LoadgenInstanceId)
+LOADGEN_ID=$(source scripts/lib.sh && out consumer LoadgenInstanceId)
 aws ssm start-session --target "$LOADGEN_ID"
 ```
 
@@ -206,13 +200,13 @@ lg() { docker run --rm --network host --read-only --tmpfs /tmp --cap-drop ALL \
 lg k6 version
 ```
 
-### 2.7 Smoke test (all paths, IPv6 and IPv4)
+### 2.6 Smoke test (all paths, IPv6 and IPv4)
 
 ```bash
 lg probe-paths.sh --context trusted
 ```
 
-Expected (dual-stack mode, `LatticeAuthMode=vpc-only`):
+Expected (dual-stack mode, `latticeAuthMode=vpc-only`):
 
 | target | IPv6 | IPv4 | provider saw |
 |--------|------|------|--------------|
@@ -278,7 +272,7 @@ Details and the expected matrix: [05-security-scenarios.md](05-security-scenario
 |----|------|-----|
 | X-1 | Network layer: an untrusted client in the same VPC | `./scripts/swap-client-sg.sh untrusted` → `lg probe-paths.sh --context untrusted` → `./scripts/swap-client-sg.sh trusted` |
 | X-2 | PrivateLink acceptance | probe before `accept-endpoint.sh` |
-| X-3 | Lattice auth policy: anonymous vs SigV4 | redeploy 02 with `LatticeAuthMode=iam-required` → `lg probe-paths.sh --context iam-required` |
+| X-3 | Lattice auth policy: anonymous vs SigV4 | `npm run deploy -- -c latticeAuthMode=iam-required` → `lg probe-paths.sh --context iam-required` |
 | X-4 | What the provider sees | `./scripts/source-ip-report.sh 60` |
 | X-5 | Data perimeter with endpoint + bucket policies | `s3*-outside` rows in the probe, and `curl` from CloudShell (internet) |
 | X-6 | Overlapping IPv4 | both VPCs are `10.0.0.0/16` — and everything above worked |
@@ -288,15 +282,12 @@ Details and the expected matrix: [05-security-scenarios.md](05-security-scenario
 
 ## 5. Optional: IPv6-only workloads
 
-Switch the workload subnets to IPv6-only. Subnets cannot change type in place, so **delete in reverse order and redeploy** with `WorkloadIpMode=ipv6only` (and `ProviderWorkloadIpMode=ipv6only` for stack 02):
+Switch the workload subnets to IPv6-only. A subnet cannot change type in place, so **destroy and redeploy** with the context set — with cdkd this takes minutes, not a CloudFormation stack-delete cycle:
 
 ```bash
-# after section 6 (clean up) for stacks 04, 03, 02 and both VPC stacks:
-for role in consumer provider; do
-  aws cloudformation deploy --stack-name "$PREFIX-$role-vpc" --template-file cfn/01-vpc.yaml \
-    --parameter-overrides Prefix="$PREFIX" Role="$role" WorkloadIpMode=ipv6only --capabilities CAPABILITY_IAM
-done
-# then 2.2 with ProviderWorkloadIpMode=ipv6only, 2.4, 2.5 as before (images stay in ECR only if you keep stack 02)
+npm run destroy
+npm run deploy -- -c workloadIpMode=ipv6only
+./scripts/accept-endpoint.sh && ./scripts/upload-test-objects.sh
 ```
 
 What changes:
@@ -313,19 +304,13 @@ What changes:
 ## 6. Clean up
 
 ```bash
-aws cloudformation delete-stack --stack-name "$PREFIX-consumer"
-aws cloudformation wait stack-delete-complete --stack-name "$PREFIX-consumer"
-aws cloudformation delete-stack --stack-name "$PREFIX-provider-services"
-aws cloudformation wait stack-delete-complete --stack-name "$PREFIX-provider-services"
-aws cloudformation delete-stack --stack-name "$PREFIX-provider-platform"
-aws cloudformation wait stack-delete-complete --stack-name "$PREFIX-provider-platform"
-for role in consumer provider; do aws cloudformation delete-stack --stack-name "$PREFIX-$role-vpc"; done
+npm run destroy
 ```
 
-- The S3 buckets must be **empty** before stack 04 can delete them:
-  `aws s3 rm "s3://$PREFIX-data-$ACCOUNT_ID" --recursive && aws s3 rm "s3://$PREFIX-outside-$ACCOUNT_ID" --recursive`
-- ECR repositories are deleted with their images (`EmptyOnDelete`)
-- Check that nothing is left: `aws resourcegroupstaggingapi get-resources --tag-filters Key=Project,Values=$PREFIX --query 'ResourceTagMappingList[].ResourceARN'`
+`scripts/destroy.sh` empties the two S3 buckets, runs `cdkd destroy --all --yes`, deletes `cdk-outputs.json` and lists anything still tagged `Project=<prefix>` (the list should be empty).
+
+- The images stay in the cdkd container-asset repository. Remove unreferenced ones with `npx cdkd gc` (dry run first, see `npx cdkd gc --help`)
+- `npx cdkd bootstrap --destroy` removes cdkd's asset storage for the region if you do not use cdkd elsewhere
 - Delete the budget if you created it only for this lab
 
 ---
@@ -341,7 +326,8 @@ for role in consumer provider; do aws cloudformation delete-stack --stack-name "
 - [ ] Bucket policies allow reads only via `aws:SourceVpce`, deny non-TLS; Block Public Access is on
 - [ ] EC2: IMDSv2 required, hop limit 1, SSM only (no SSH, no inbound rules), encrypted EBS
 - [ ] Containers: non-root, read-only root FS, all capabilities dropped, no ECS Exec, task role without permissions
-- [ ] Images scanned in ECR and referenced by digest (base images pinned by digest too)
+- [ ] ECR registry scanning on, findings checked; images use content-hash tags (base images pinned by digest too)
+- [ ] `npm test` passes; `cdk-outputs.json` and deploy logs are not committed or shared
 - [ ] Credentials for the SigV4 test are read from IMDS inside the container and passed to curl via stdin
 - [ ] Log retention set (7 days by default)
 - [ ] Budget alert set, everything deleted on the same day
@@ -350,11 +336,16 @@ for role in consumer provider; do aws cloudformation delete-stack --stack-name "
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `01-vpc` fails on `IpAddressType` | No IPv6 support for that endpoint in the region | Use `EndpointIpAddressType=ipv4` / `S3GatewayIpAddressType=ipv4` (dual-stack mode only) |
+| Deploy fails on `IpAddressType` | No IPv6 support for that endpoint in the region | `-c endpointIpAddressType=ipv4` / `-c s3GatewayIpAddressType=ipv4` (dual-stack mode only) |
+| `Failed to acquire lock for stack` | Another / interrupted cdkd run holds the lock | Wait, or if no other run is active: `npx cdkd force-unlock <stack>` |
+| A deploy failed half-way | cdkd rolled back automatically, the note says a resource may be partially applied | Fix and deploy again (fix forward), or `npx cdkd rollback <stack> --revert-failed` |
+| `cdk-outputs.json not found` | Scripts run before a successful `npm run deploy` | Deploy first, or set `OUTPUTS_FILE` |
+| Docker build fails during deploy | Docker not running, or wrong architecture | `docker info`; match `-c cpuArchitecture` to what you build |
 | Tasks stuck in `PROVISIONING` / image pull fails | ECR / S3 endpoint missing, endpoint policy too strict | Check the ECR endpoints and the `EcrImageLayers` statement of the S3 gateway endpoint policy |
+| Load generator `docker pull` is denied | The image is in a repository the role does not cover | The role allows `cdkd-container-assets-*` and `cdk-*-container-assets-*`; check `LoadgenImageUri` |
 | `dnf` fails in the load generator user data | S3 gateway endpoint policy | The `al2023-repos-<region>-*` statement must be there |
 | PrivateLink returns `timeout/refused` | Connection not accepted yet, or the client SG is untrusted | `./scripts/accept-endpoint.sh`, check the SG |
-| Lattice returns 403 | Auth policy: source VPC or `iam-required` | Check `LatticeAuthMode`, the access log `authDeniedReason` |
+| Lattice returns 403 | Auth policy: source VPC or `iam-required` | Check the `latticeAuthMode` you deployed with, the access log `authDeniedReason` |
 | Lattice targets `UNHEALTHY` | Task SG misses the Lattice ranges | `169.254.171.0/24` and `fd00:ec2:80::/64` on 8080 |
 | S3 returns 403 for the data bucket | Request did not go through a consumer endpoint, or the object is missing | Use the dual-stack S3 name / the vpce name; run `upload-test-objects.sh` |
 | k6 `dropped_iterations` > 0 | Load generator limit | Use a larger instance or lower rates |

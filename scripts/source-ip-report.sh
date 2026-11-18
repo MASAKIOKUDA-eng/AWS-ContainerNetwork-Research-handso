@@ -8,8 +8,8 @@ set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
 MIN="${1:-60}"; [[ "$MIN" =~ ^[0-9]+$ ]] || { echo "minutes must be a number" >&2; exit 1; }
-APP_LG="$(out provider-platform AppLogGroupName)"
-LAT_LG="$(out provider-platform LatticeAccessLogGroupName)"
+APP_LG="$(out provider AppLogGroupName)"
+LAT_LG="$(out provider LatticeAccessLogGroupName)"
 
 query() {  # $1 log group, $2 query
   local id

@@ -7,7 +7,7 @@ set -euo pipefail
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
 
-SVC_ID="$(out provider-platform EndpointServiceId)"
+SVC_ID="$(out provider EndpointServiceId)"
 EP_ID="$(out consumer PrivateLinkEndpointId)"
 [[ "$SVC_ID" =~ ^vpce-svc-[0-9a-f]+$ && "$EP_ID" =~ ^vpce-[0-9a-f]+$ ]] || { echo "stack outputs not found" >&2; exit 1; }
 

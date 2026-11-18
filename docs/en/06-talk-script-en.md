@@ -57,14 +57,14 @@
 - Diagram from [02-architecture.md](02-architecture.md)
 - Two VPCs, both 10.0.0.0/16, no internet at all
 - Same ECS task behind PrivateLink and behind Lattice
-- k6 load generator, all on GitHub
+- k6 load generator; AWS CDK app deployed with cdkd — all on GitHub
 
 **Say**
 > Here is the lab. Two VPCs. Both use the same IPv4 CIDR — on purpose.
 > There is no internet gateway, no NAT, nothing. The only way out is the path I want to measure.
 > On the provider side, the same container runs twice. One copy behind a PrivateLink endpoint service. One copy behind VPC Lattice.
 > On the consumer side, a load generator with k6 calls each path over IPv6.
-> Everything is CloudFormation, and it is on GitHub. You can run it in your own account.
+> Everything is AWS CDK, deployed with cdkd in about `[RESULT]` minutes, and it is on GitHub. You can run it in your own account.
 
 ### Slide 5 ✂ — Design practice: subnet tiers (4:00–5:00)
 
@@ -243,6 +243,7 @@
 | Lattice cost vs PrivateLink? | Different models: Lattice charges per service-hour, per GB and per request; PrivateLink per endpoint-AZ-hour and per GB plus the NLB. Calculate with your request profile. |
 | Can PrivateLink pass the client IP? | With Proxy Protocol v2 on the target group, if the application parses it. |
 | Is IPv6-only production ready on ECS? | Supported since Sep 2025. Check every dependency (ECR, logs, secrets, your own APIs) for IPv6 or dual-stack endpoints; ECS Exec is not supported in IPv6-only. |
+| Why cdkd and not CloudFormation? | The lab is built and destroyed the same day, several times (dual-stack, IPv6-only, auth modes). cdkd deploys the same CDK app with direct SDK calls, so each cycle is shorter. It is for dev/test; for production the same app deploys with `cdk deploy`. |
 | What about internet egress in IPv6? | Egress-only internet gateway for IPv6, NAT gateway for NAT64 with DNS64, and inspection with Network Firewall / GWLB — see the AWS blog on IPv6 inspection architectures. |
 
 ## Rehearsal checklist

@@ -9,11 +9,11 @@ source "$(dirname "$0")/lib.sh"
 
 RATES="${1:-100 500 1000}" IP="${2:-onlyIPv6}"
 [[ "$RATES" =~ ^[0-9\ ]+$ && "$IP" =~ ^(onlyIPv6|onlyIPv4|preferIPv6|preferIPv4)$ ]] || { echo "invalid args" >&2; exit 1; }
-NLB="$(out provider-platform NlbDnsName)"
-TD="$(out provider-services BaselineTaskDefArn)"
-LOG_GROUP="$(out provider-platform AppLogGroupName)"
-SUBNET="$(aws cloudformation list-exports --query "Exports[?Name=='$P-provider-WorkloadSubnetA'].Value" --output text)"
-SG="$(out provider-platform BaselineSg)"
+NLB="$(out provider NlbDnsName)"
+TD="$(out provider BaselineTaskDefArn)"
+LOG_GROUP="$(out provider AppLogGroupName)"
+SUBNET="$(out provider-vpc WorkloadSubnetA)"
+SG="$(out provider BaselineSg)"
 
 CMD="cd /tmp && run-k6.sh --label baseline-nlb --url http://$NLB/1k --rates '$RATES' --ip $IP --pause 10 && sed 's/^/K6CSV /' results/k6.csv"
 OVERRIDES="$(jq -n --arg c "$CMD" '{containerOverrides:[{name:"k6",command:["bash","-c",$c]}]}')"

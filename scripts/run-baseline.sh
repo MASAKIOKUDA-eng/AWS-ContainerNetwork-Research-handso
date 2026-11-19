@@ -15,7 +15,7 @@ LOG_GROUP="$(out provider AppLogGroupName)"
 SUBNET="$(out provider-vpc WorkloadSubnetA)"
 SG="$(out provider BaselineSg)"
 
-CMD="cd /tmp && run-k6.sh --label baseline-nlb --url http://$NLB/1k --rates '$RATES' --ip $IP --pause 10 && sed 's/^/K6CSV /' results/k6.csv"
+CMD="cd /work/scratch && run-k6.sh --label baseline-nlb --url http://$NLB/1k --rates '$RATES' --ip $IP --pause 10 && sed 's/^/K6CSV /' results/k6.csv"
 OVERRIDES="$(jq -n --arg c "$CMD" '{containerOverrides:[{name:"k6",command:["bash","-c",$c]}]}')"
 ARN="$(aws ecs run-task --cluster "$P" --task-definition "$TD" --launch-type FARGATE \
   --network-configuration "awsvpcConfiguration={subnets=[$SUBNET],securityGroups=[$SG],assignPublicIp=DISABLED}" \

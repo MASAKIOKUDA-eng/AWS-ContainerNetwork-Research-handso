@@ -383,14 +383,19 @@ export class ProviderStack extends Stack {
       runtimePlatform,
       executionRoleArn: executionRole.attrArn,
       taskRoleArn: taskRole.attrArn,
-      volumes: [{ name: 'k6-tmp' }],
+      volumes: [{ name: 'k6-tmp' }, { name: 'k6-scratch' }],
       containerDefinitions: [
         {
           name: 'k6',
           image: this.loadgenImage.imageUri,
           essential: true,
           ...hardening,
-          mountPoints: [{ sourceVolume: 'k6-tmp', containerPath: '/tmp' }],
+          // /tmp alone is not enough: a Fargate bind mount is root:0755, so the non-root k6 user cannot
+          // write results there. /work/scratch exists in the image owned by that user (see the Dockerfile).
+          mountPoints: [
+            { sourceVolume: 'k6-tmp', containerPath: '/tmp' },
+            { sourceVolume: 'k6-scratch', containerPath: '/work/scratch' },
+          ],
           logConfiguration: awslogs('baseline'),
         },
       ],

@@ -162,7 +162,12 @@ describe('VPC endpoints and S3 data perimeter', () => {
       t.allResourcesProperties('AWS::EC2::VPCEndpoint', Match.objectLike({}));
       const eps = Object.values(t.findResources('AWS::EC2::VPCEndpoint', { Properties: { VpcEndpointType: 'Interface' } }));
       expect(eps.length).toBeGreaterThanOrEqual(3);
-      for (const e of eps) expect(e.Properties.IpAddressType).toBe('dualstack');
+      for (const e of eps) {
+        // ec2messages has no dual-stack endpoint; it stays IPv4 (SSM Agent 3.3.40+ does not need it).
+        const expected = JSON.stringify(e.Properties.ServiceName).includes('ec2messages') ? 'ipv4' : 'dualstack';
+        expect(e.Properties.IpAddressType).toBe(expected);
+        expect(e.Properties.DnsOptions.DnsRecordIpType).toBe(expected);
+      }
     }
   });
   it('buckets block public access, enforce TLS and allow reads only via the consumer endpoints', () => {

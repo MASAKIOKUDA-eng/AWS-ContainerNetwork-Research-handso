@@ -115,14 +115,19 @@ export class VpcStack extends Stack {
           ] as [string, string][])
         : []),
     ];
+    // ec2messages has no dual-stack endpoint (checked in ap-northeast-1, 2026-11:
+    // SupportedIpAddressTypes = [ipv4]); creating it as dualstack fails with HTTP 400.
+    // SSM Agent 3.3.40+ works through ssmmessages alone, so IPv6-only hosts still register.
+    const ipv4OnlyServices = new Set(['ec2messages']);
     for (const [svc, logicalId] of services) {
+      const ipType = ipv4OnlyServices.has(svc) ? 'ipv4' : config.endpointIpAddressType;
       new ec2.CfnVPCEndpoint(this, logicalId, {
         vpcId: vpc.ref,
         serviceName: `com.amazonaws.${this.region}.${svc}`,
         vpcEndpointType: 'Interface',
         privateDnsEnabled: true,
-        ipAddressType: config.endpointIpAddressType,
-        dnsOptions: { dnsRecordIpType: config.endpointIpAddressType },
+        ipAddressType: ipType,
+        dnsOptions: { dnsRecordIpType: ipType },
         subnetIds: this.edgeSubnetIds,
         securityGroupIds: [endpointSg.ref],
       });

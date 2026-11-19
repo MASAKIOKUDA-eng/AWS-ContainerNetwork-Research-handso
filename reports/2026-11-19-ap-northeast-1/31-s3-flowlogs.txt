@@ -1,0 +1,4 @@
+is_ipv6=1  path=1  action=ACCEPT  total_bytes=2490544476  records=125135
+is_ipv6=1  path=7  action=ACCEPT  total_bytes=664700145  records=3950
+is_ipv6=0  path=1  action=ACCEPT  total_bytes=27646701  records=456
+is_ipv6=0  path=7  action=ACCEPT  total_bytes=8750858  records=478

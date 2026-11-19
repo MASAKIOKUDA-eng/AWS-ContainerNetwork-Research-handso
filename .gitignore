@@ -1,0 +1,12 @@
+node_modules/
+cdk.out/
+.cdkd/
+# Stack outputs contain account IDs / resource IDs: keep them local.
+cdk-outputs.json
+results/*
+!results/.gitkeep
+deploy-logs/*.log
+__pycache__/
+*.pyc
+.DS_Store
+cdk.out.*/

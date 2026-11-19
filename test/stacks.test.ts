@@ -195,18 +195,22 @@ describe('compute hardening', () => {
     for (const td of Object.values(dual.provider.findResources('AWS::ECS::TaskDefinition'))) {
       for (const c of td.Properties.ContainerDefinitions) {
         expect(c.ReadonlyRootFilesystem).toBe(true);
+        if (c.Name === 'scratch-init') continue; // checked below
         expect(c.LinuxParameters.Capabilities.Drop).toEqual(['ALL']);
       }
     }
     dual.provider.allResourcesProperties('AWS::ECS::Service', { EnableExecuteCommand: false });
   });
-  it('only the baseline init container runs as root, with CAP_CHOWN alone, before the non-root k6', () => {
+  it('only the baseline init container runs as root, keeping CAP_CHOWN alone, before the non-root k6', () => {
     for (const td of Object.values(dual.provider.findResources('AWS::ECS::TaskDefinition'))) {
       for (const c of td.Properties.ContainerDefinitions) {
         if (c.User === '0') {
           expect(c.Name).toBe('scratch-init');
           expect(c.Essential).toBe(false);
-          expect(c.LinuxParameters.Capabilities.Add).toEqual(['CHOWN']);
+          const dropped = c.LinuxParameters.Capabilities.Drop as string[];
+          expect(dropped).not.toContain('CHOWN');
+          for (const cap of ['DAC_OVERRIDE', 'FOWNER', 'SETUID', 'SETGID', 'NET_RAW', 'KILL']) expect(dropped).toContain(cap);
+          expect(c.LinuxParameters.Capabilities.Add).toBeUndefined();
         } else {
           expect(c.LinuxParameters.Capabilities.Add).toBeUndefined();
         }

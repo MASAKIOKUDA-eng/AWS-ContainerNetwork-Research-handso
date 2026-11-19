@@ -388,14 +388,20 @@ export class ProviderStack extends Stack {
         {
           // A Fargate bind-mount volume is always root:0755 (the image directory's owner is not kept),
           // so the non-root k6 user could not write its results. This short-lived init container is the
-          // only part that runs as root, with CAP_CHOWN alone, and hands the volume to UID 12345.
+          // only part that runs as root, keeping CAP_CHOWN alone, and hands the volume to UID 12345.
           name: 'scratch-init',
           image: this.loadgenImage.imageUri,
           essential: false,
           user: '0',
           command: ['chown', '12345:12345', '/work/scratch'],
           readonlyRootFilesystem: true,
-          linuxParameters: { capabilities: { drop: ['ALL'], add: ['CHOWN'] } },
+          // Fargate cannot add capabilities (only SYS_PTRACE), so drop every Docker default except CHOWN.
+          linuxParameters: {
+            capabilities: {
+              drop: ['AUDIT_WRITE', 'DAC_OVERRIDE', 'FOWNER', 'FSETID', 'KILL', 'MKNOD', 'NET_BIND_SERVICE',
+                'NET_RAW', 'SETFCAP', 'SETGID', 'SETPCAP', 'SETUID', 'SYS_CHROOT'],
+            },
+          },
           mountPoints: [{ sourceVolume: 'k6-scratch', containerPath: '/work/scratch' }],
           logConfiguration: awslogs('baseline'),
         },

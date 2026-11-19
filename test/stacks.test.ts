@@ -237,3 +237,18 @@ describe('config validation', () => {
     expect(() => synth(ctx)).toThrow();
   });
 });
+
+describe('deploy ordering', () => {
+  it('every resource that reads Vpc.Ipv6CidrBlocks depends on the IPv6 CIDR association', () => {
+    for (const t of [dual.consumerVpc, dual.providerVpc]) {
+      const resources = t.toJSON().Resources as Record<string, { DependsOn?: string | string[]; Properties?: unknown }>;
+      const assoc = Object.keys(t.findResources('AWS::EC2::VPCCidrBlock'));
+      expect(assoc).toHaveLength(1);
+      for (const [id, r] of Object.entries(resources)) {
+        if (!JSON.stringify(r.Properties ?? {}).includes('Ipv6CidrBlocks')) continue;
+        const deps = ([] as string[]).concat(r.DependsOn ?? []);
+        expect(deps, `${id} must DependsOn ${assoc[0]}`).toContain(assoc[0]);
+      }
+    }
+  });
+});

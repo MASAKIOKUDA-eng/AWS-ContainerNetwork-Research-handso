@@ -97,6 +97,8 @@ export class VpcStack extends Stack {
       securityGroupEgress: [{ ipProtocol: '-1', cidrIp: '127.0.0.1/32', description: 'No egress' }],
       tags: tags(`${p}-${role}-aws-endpoints`),
     });
+    // The IPv6 ingress rule reads Vpc.Ipv6CidrBlocks, which is empty until the /56 is associated.
+    endpointSg.addResourceDependency(ipv6Block);
 
     // ------------------------------------------------------------ VPC endpoints for AWS services
     // Dual-stack interface endpoints answer AAAA from the VPC resolver, so IPv6-only tasks can use them.

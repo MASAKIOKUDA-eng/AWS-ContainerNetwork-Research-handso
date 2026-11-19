@@ -45,6 +45,11 @@ lg probe-paths.sh --context untrusted
 - エンドポイントが `pendingAcceptance` の間、`pl-http` は timeout / refused
 - 承諾した後は 200
 
+> **DNS のネガティブキャッシュ**：`pendingAcceptance` の間はエンドポイントの DNS 名がまだ存在しない（NXDOMAIN、プローブでは `A=0 AAAA=0`）。
+> VPC のリゾルバーはこの応答をキャッシュするため、2026-11-19 の実施では承諾後も利用側 VPC の中で約 9.7 分間名前解決に失敗した（外からはすでに解決できていた）。
+> スピードのシナリオの前に、負荷生成 EC2 で `dig +short AAAA $PL_DNS` が答えることを確認する。
+> 設計の教訓：承認 **前** に名前を引いた利用者は、人の承認に加えてネガティブキャッシュの TTL も待つことになる（S-6）。
+
 `aws ec2 describe-vpc-endpoint-service-permissions --service-id <id>` も確認します。許可されているのは自アカウントだけです。別アカウントの利用者は、エンドポイントを作ることもできません。
 
 ## X-3 Lattice の認証ポリシー：匿名と SigV4

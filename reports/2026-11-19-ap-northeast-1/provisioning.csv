@@ -1,0 +1,11 @@
+privatelink,accept_to_available,38,s,2026-11-19T11:10:10Z
+privatelink,interface endpoint (to pendingAcceptance),6,s,2026-11-19T11:11:12Z
+lattice,service network VPC association,74,s,2026-11-19T11:11:12Z
+s3-interface,S3 interface endpoint,247,s,2026-11-19T11:11:12Z
+s3-gateway,S3 gateway endpoint,4,s,2026-11-19T11:11:12Z
+privatelink,provider: NLB,127,s,2026-11-19T11:11:12Z
+privatelink,provider: endpoint service,2,s,2026-11-19T11:11:12Z
+lattice,provider: Lattice service,10,s,2026-11-19T11:11:12Z
+lattice,provider: service association,10,s,2026-11-19T11:11:12Z
+privatelink,provider: ECS service behind the NLB,112,s,2026-11-19T11:11:12Z
+lattice,provider: ECS service with Lattice,77,s,2026-11-19T11:11:12Z

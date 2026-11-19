@@ -36,6 +36,7 @@ The infrastructure is an **AWS CDK (TypeScript) app deployed with [cdkd](https:/
 | Talk script (20 min, 10-min cut) | [docs/en/06-talk-script-en.md](docs/en/06-talk-script-en.md) | [docs/ja/06-talk-script.md](docs/ja/06-talk-script.md) |
 | Event runbook | [docs/en/07-event-runbook.md](docs/en/07-event-runbook.md) | [docs/ja/07-event-runbook.md](docs/ja/07-event-runbook.md) |
 | Result template (for slides) | [docs/en/result-template.md](docs/en/result-template.md) | [docs/ja/result-template.md](docs/ja/result-template.md) |
+| Verification report (2026-11-19, ap-northeast-1, Japanese) | ― | [reports/2026-11-19-verification-report.md](reports/2026-11-19-verification-report.md) |
 | References | [docs/en/references.md](docs/en/references.md) | [docs/ja/references.md](docs/ja/references.md) |
 
 ## Repository layout

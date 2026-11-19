@@ -345,6 +345,9 @@ npm run destroy
 | Load generator `docker pull` is denied | The image is in a repository the role does not cover | The role allows `cdkd-container-assets-*` and `cdk-*-container-assets-*`; check `LoadgenImageUri` |
 | `dnf` fails in the load generator user data | S3 gateway endpoint policy | The `al2023-repos-<region>-*` statement must be there |
 | PrivateLink returns `timeout/refused` | Connection not accepted yet, or the client SG is untrusted | `./scripts/accept-endpoint.sh`, check the SG |
+| PrivateLink still `timeout/refused` with `A=0 AAAA=0` after acceptance | The VPC resolver cached the NXDOMAIN from the probe you ran before acceptance (X-2); about 9.7 minutes in the 2026-11-19 run | Wait until `dig +short AAAA $PL_DNS` answers on the load generator, then start S-1 (see X-2) |
+| Deploy fails on `Ec2MessagesEndpoint`: *doesn't support this IP address type dualstack* | `ec2messages` has no dual-stack endpoint | Already handled: the stack creates it as IPv4 (SSM Agent 3.3.40+ only needs `ssm` + `ssmmessages`) |
+| After an interrupted / failed deploy, tasks or the load generator cannot reach ECR, Logs or S3 | cdkd state and AWS drifted (endpoints recorded in state but missing in AWS) | Check `aws ec2 describe-vpc-endpoints`; if they differ from `npx cdkd state resources <stack>`, `npm run destroy` and deploy again |
 | Lattice returns 403 | Auth policy: source VPC or `iam-required` | Check the `latticeAuthMode` you deployed with, the access log `authDeniedReason` |
 | Lattice targets `UNHEALTHY` | Task SG misses the Lattice ranges | `169.254.171.0/24` and `fd00:ec2:80::/64` on 8080 |
 | S3 returns 403 for the data bucket | Request did not go through a consumer endpoint, or the object is missing | Use the dual-stack S3 name / the vpce name; run `upload-test-objects.sh` |

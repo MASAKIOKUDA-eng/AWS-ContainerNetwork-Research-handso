@@ -345,6 +345,9 @@ npm run destroy
 | 負荷生成 EC2 の `docker pull` が拒否される | ロールの対象外のリポジトリにイメージがある | ロールは `cdkd-container-assets-*` と `cdk-*-container-assets-*` を許可。`LoadgenImageUri` を確認 |
 | 負荷生成 EC2 のユーザーデータで `dnf` が失敗 | S3 ゲートウェイエンドポイントのポリシー | `al2023-repos-<region>-*` の許可があるか確認 |
 | PrivateLink が `timeout/refused` | まだ承諾していない、またはクライアントの SG が信頼しない側 | `./scripts/accept-endpoint.sh`、SG を確認 |
+| 承諾後も PrivateLink が `timeout/refused` で `A=0 AAAA=0` | 承諾前のプローブ（X-2）で受けた NXDOMAIN を VPC のリゾルバーがキャッシュしている。2026-11-19 の実施では約 9.7 分 | 負荷生成 EC2 で `dig +short AAAA $PL_DNS` が答えるまで待ってから S-1 を始める（X-2 を参照） |
+| `Ec2MessagesEndpoint` で *doesn't support this IP address type dualstack* | `ec2messages` にはデュアルスタックのエンドポイントがない | 対応済み：スタックは IPv4 で作る（SSM Agent 3.3.40 以降は `ssm` と `ssmmessages` だけで動く） |
+| 中断 / 失敗したデプロイのあと、タスクや負荷生成 EC2 が ECR、Logs、S3 に届かない | cdkd の状態と AWS がずれた（状態にはあるエンドポイントが実際にはない） | `aws ec2 describe-vpc-endpoints` と `npx cdkd state resources <stack>` を比べる。ずれていたら `npm run destroy` して作り直す |
 | Lattice が 403 | 認証ポリシー：送信元 VPC、または `iam-required` | デプロイしたときの `latticeAuthMode` と、アクセスログの `authDeniedReason` を確認 |
 | Lattice のターゲットが `UNHEALTHY` | タスクの SG に Lattice の範囲がない | 8080 で `169.254.171.0/24` と `fd00:ec2:80::/64` を許可 |
 | データ用バケットで S3 が 403 | 利用側のエンドポイントを通っていない、またはオブジェクトがない | デュアルスタックの S3 名 / vpce の名前を使う。`upload-test-objects.sh` を実行 |

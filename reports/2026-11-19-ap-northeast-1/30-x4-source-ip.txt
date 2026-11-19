@@ -1,0 +1,9 @@
+== Provider access log: source address / Lattice headers per service
+remote=169.254.171.197  lattice_source_vpc=vpc-xxxx  requests=1340654
+remote=10.0.13.143  requests=662158
+remote=10.0.21.32  requests=480991
+remote=169.254.171.197  lattice_source_vpc=vpc-xxxx  identity=Principal=arn:aws:sts::<ACCOUNT_ID>:assu  requests=6
+
+== VPC Lattice access log: auth decisions
+responseCode=200  authDeniedReason=-  callerPrincipal=Anonymous  sourceVpcArn=arn:aws:ec2:ap-northeast-1:<ACCOUNT_ID>:vpc/vpc-xxxx  requests=1340654
+responseCode=200  authDeniedReason=-  callerPrincipal=arn:aws:sts::<ACCOUNT_ID>:assumed-role/v6lab-consumer-LoadgenRole-xxxx/i-xxxx  sourceVpcArn=arn:aws:ec2:ap-northeast-1:<ACCOUNT_ID>:vpc/vpc-xxxx  requests=6

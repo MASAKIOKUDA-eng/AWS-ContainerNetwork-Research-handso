@@ -45,6 +45,11 @@ Run the probe **before** `./scripts/accept-endpoint.sh`:
 - `pl-http` → timeout / refused while the endpoint is `pendingAcceptance`
 - After acceptance → 200
 
+> **Negative DNS caching.** While the endpoint is `pendingAcceptance`, its DNS name does not exist yet (NXDOMAIN, `A=0 AAAA=0` in the probe).
+> The VPC resolver caches that answer, so after acceptance the name kept failing inside the consumer VPC for about 9.7 minutes in the
+> 2026-11-19 run, while it already resolved from outside. Wait for `dig +short AAAA $PL_DNS` on the load generator before the speed scenarios.
+> Design lesson: a consumer that looks up the name *before* approval waits for the negative-cache TTL as well as for the human approval (S-6).
+
 Also check `aws ec2 describe-vpc-endpoint-service-permissions --service-id <id>`: only this account is allowed. A consumer from another account would not even be able to create the endpoint.
 
 ## X-3 Lattice auth policy: anonymous vs SigV4

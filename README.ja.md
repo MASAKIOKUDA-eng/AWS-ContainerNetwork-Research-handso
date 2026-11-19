@@ -36,6 +36,7 @@
 | 登壇スクリプト（20 分、10 分版の削り方つき） | [docs/en/06-talk-script-en.md](docs/en/06-talk-script-en.md) | [docs/ja/06-talk-script.md](docs/ja/06-talk-script.md) |
 | 当日までの手順 | [docs/en/07-event-runbook.md](docs/en/07-event-runbook.md) | [docs/ja/07-event-runbook.md](docs/ja/07-event-runbook.md) |
 | 結果のテンプレート（スライド用） | [docs/en/result-template.md](docs/en/result-template.md) | [docs/ja/result-template.md](docs/ja/result-template.md) |
+| 検証レポート（2026-11-19、ap-northeast-1） | ― | [reports/2026-11-19-verification-report.md](reports/2026-11-19-verification-report.md) |
 | 参考資料 | [docs/en/references.md](docs/en/references.md) | [docs/ja/references.md](docs/ja/references.md) |
 
 ## リポジトリ構成

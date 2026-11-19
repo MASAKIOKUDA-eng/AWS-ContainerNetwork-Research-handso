@@ -200,6 +200,24 @@ describe('compute hardening', () => {
     }
     dual.provider.allResourcesProperties('AWS::ECS::Service', { EnableExecuteCommand: false });
   });
+  it('only the baseline init container runs as root, with CAP_CHOWN alone, before the non-root k6', () => {
+    for (const td of Object.values(dual.provider.findResources('AWS::ECS::TaskDefinition'))) {
+      for (const c of td.Properties.ContainerDefinitions) {
+        if (c.User === '0') {
+          expect(c.Name).toBe('scratch-init');
+          expect(c.Essential).toBe(false);
+          expect(c.LinuxParameters.Capabilities.Add).toEqual(['CHOWN']);
+        } else {
+          expect(c.LinuxParameters.Capabilities.Add).toBeUndefined();
+        }
+      }
+    }
+    dual.provider.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      ContainerDefinitions: Match.arrayWith([
+        Match.objectLike({ Name: 'k6', DependsOn: [{ ContainerName: 'scratch-init', Condition: 'SUCCESS' }] }),
+      ]),
+    });
+  });
   it('the task role has no policies', () => {
     const roles = dual.provider.findResources('AWS::IAM::Role');
     expect(roles.TaskRole.Properties.Policies).toBeUndefined();

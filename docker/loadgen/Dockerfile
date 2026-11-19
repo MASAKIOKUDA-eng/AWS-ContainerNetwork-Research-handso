@@ -12,9 +12,8 @@ RUN chmod 0555 /opt/v6lab/*.sh \
  && ln -s /opt/v6lab/run-k6.sh /usr/local/bin/run-k6.sh \
  && ln -s /opt/v6lab/probe-paths.sh /usr/local/bin/probe-paths.sh
 # Results are written to /work/results (mount a host directory there).
-# /work/scratch is the writable working directory of the Fargate baseline task (S-0): Fargate creates
-# bind-mount volumes as root:0755 unless the container path exists in the image, in which case the
-# directory's ownership is copied - so the non-root user can write there with a read-only root FS.
+# /work/scratch is the writable working directory of the Fargate baseline task (S-0); the task's
+# init container chowns the volume mounted there (see BaselineTaskDef in lib/provider-stack.ts).
 RUN mkdir -p /work/scratch && chown 12345:12345 /work/scratch
 WORKDIR /work
 USER 12345
